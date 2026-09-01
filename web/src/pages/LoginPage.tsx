@@ -76,7 +76,7 @@ export default function LoginPage() {
           <DatabaseZap className="size-6 text-white" />
         </div>
         <h1 className="text-xl font-semibold tracking-tight">Workbench</h1>
-        <p className="mt-1.5 text-sm text-muted-foreground">Gaucho Racing database console</p>
+        <p className="mt-1.5 text-sm text-muted-foreground">Gaucho Racing&apos;s database management console.</p>
         {error ? (
           <div className="mt-6 w-full rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {error}

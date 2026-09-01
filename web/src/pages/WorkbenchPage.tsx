@@ -34,6 +34,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerE
 import { toast } from "sonner"
 
 import { ConfirmationDialog } from "@/components/ConfirmationDialog"
+import type { ImportResult } from "@/components/DataImportDialog"
 import type { ExportFormat } from "@/components/ExportDialog"
 import { Button } from "@/components/ui/button"
 import {
@@ -122,6 +123,7 @@ export default function WorkbenchPage() {
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv")
   const [exportStatement, setExportStatement] = useState("")
+  const [exportSourceName, setExportSourceName] = useState("query")
   const [ddlTable, setDDLTable] = useState<CatalogTable | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [bottomTab, setBottomTab] = useState<"results" | "history">("results")
@@ -436,6 +438,7 @@ export default function WorkbenchPage() {
   function openTableExport(table: CatalogTable) {
     if (!isAdmin || !activeTargetID || !activeDatabaseName) return
     setExportStatement(selectStatementForTable(table.schema, table.name))
+    setExportSourceName(table.name)
     setExportDialogOpen(true)
   }
 
@@ -471,6 +474,7 @@ export default function WorkbenchPage() {
     const executableStatement = statementForEditor(editorRef.current, statement)
     if (!executableStatement) return
     setExportStatement(executableStatement)
+    setExportSourceName("query")
     setExportDialogOpen(true)
   }
 
@@ -872,7 +876,14 @@ export default function WorkbenchPage() {
             target={selectedTarget}
             databaseName={activeDatabaseName}
             tables={catalogQuery.data?.tables ?? []}
-            onImported={(rowCount, table) => toast.success(`${rowCount.toLocaleString()} rows imported into ${table.schema}.${table.name}`)}
+            onImported={(importResult: ImportResult, table) => {
+              const destination = `${table.schema}.${table.name}`
+              if (importResult.error_count > 0) {
+                toast.warning(`${importResult.row_count.toLocaleString()} rows imported into ${destination} · ${importResult.error_count.toLocaleString()} skipped`)
+              } else {
+                toast.success(`${importResult.row_count.toLocaleString()} rows imported into ${destination}`)
+              }
+            }}
           />
         </Suspense>
       )}
@@ -884,6 +895,7 @@ export default function WorkbenchPage() {
             target={selectedTarget}
             databaseName={activeDatabaseName}
             statement={exportStatement}
+            sourceName={exportSourceName}
             format={exportFormat}
             onFormatChange={setExportFormat}
           />

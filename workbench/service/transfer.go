@@ -1,10 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -16,18 +18,57 @@ import (
 	"github.com/gaucho-racing/workbench/workbench/model"
 	"github.com/gaucho-racing/workbench/workbench/pkg/logger"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/parquet-go/parquet-go"
 )
 
 const (
-	importTimeout         = 5 * time.Minute
-	exportPreviewMaxRows  = 20
-	exportPreviewMaxBytes = 512 << 10
+	importTimeout          = 5 * time.Minute
+	importPreviewMaxRows   = 20
+	importErrorSampleLimit = 100
+	importBatchSize        = 512
+	exportPreviewMaxRows   = 20
+	exportPreviewMaxBytes  = 512 << 10
 )
 
 type ImportResult struct {
-	TransferID string `json:"transfer_id"`
-	RowCount   int64  `json:"row_count"`
+	TransferID string           `json:"transfer_id"`
+	RowCount   int64            `json:"row_count"`
+	ErrorCount int64            `json:"error_count"`
+	Errors     []ImportRowError `json:"errors"`
+}
+
+type ImportRowError struct {
+	Row     int64  `json:"row"`
+	Message string `json:"message"`
+}
+
+type ImportPreview struct {
+	Columns   []string   `json:"columns"`
+	Rows      [][]string `json:"rows"`
+	RowCount  int64      `json:"row_count"`
+	Truncated bool       `json:"truncated"`
+}
+
+type ImportErrorPolicy string
+
+const (
+	ImportErrorPolicyAbort    ImportErrorPolicy = "abort"
+	ImportErrorPolicyContinue ImportErrorPolicy = "continue"
+)
+
+type ImportOptions struct {
+	ErrorPolicy ImportErrorPolicy
+}
+
+func ParseImportErrorPolicy(value string) (ImportErrorPolicy, error) {
+	policy := ImportErrorPolicy(strings.ToLower(strings.TrimSpace(value)))
+	switch policy {
+	case ImportErrorPolicyAbort, ImportErrorPolicyContinue:
+		return policy, nil
+	default:
+		return "", fmt.Errorf("error policy must be one of: abort, continue")
+	}
 }
 
 type ExportPreview struct {
@@ -455,74 +496,97 @@ func normalizeExportValues(values []interface{}) []interface{} {
 	return normalized
 }
 
-func ImportCSV(ctx context.Context, target model.DatabaseTarget, schemaName string, tableName string, fileName string, source io.ReadSeeker, actorEntityID string) (ImportResult, error) {
-	transferID, err := startDataTransferRun(ctx, target, actorEntityID, "IMPORT", schemaName, tableName, fileName, "", "csv")
+func PreviewCSVImport(ctx context.Context, target model.DatabaseTarget, schemaName string, tableName string, source io.Reader) (ImportPreview, error) {
+	header, rows, rowCount, err := inspectCSV(source, importPreviewMaxRows)
+	if err != nil {
+		return ImportPreview{}, err
+	}
+	previewContext, cancel := context.WithTimeout(ctx, config.QueryTimeoutDuration)
+	defer cancel()
+
+	pool, err := TargetPool(previewContext, target)
+	if err != nil {
+		return ImportPreview{}, err
+	}
+	defer pool.Release()
+	transaction, err := pool.BeginTx(previewContext, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return ImportPreview{}, err
+	}
+	defer transaction.Rollback(context.Background())
+	availableColumns, err := tableColumns(previewContext, transaction, schemaName, tableName)
+	if err != nil {
+		return ImportPreview{}, err
+	}
+	if err := validateImportHeader(header, availableColumns, schemaName, tableName); err != nil {
+		return ImportPreview{}, err
+	}
+	return ImportPreview{Columns: header, Rows: rows, RowCount: rowCount, Truncated: rowCount > int64(len(rows))}, nil
+}
+
+func ImportCSV(ctx context.Context, target model.DatabaseTarget, schemaName string, tableName string, fileName string, source io.ReadSeeker, actorEntityID string, options ImportOptions) (ImportResult, error) {
+	if _, err := ParseImportErrorPolicy(string(options.ErrorPolicy)); err != nil {
+		return ImportResult{}, err
+	}
+	transferID, err := startDataTransferRunWithPolicy(ctx, target, actorEntityID, "IMPORT", schemaName, tableName, fileName, "", "csv", string(options.ErrorPolicy))
 	if err != nil {
 		return ImportResult{}, err
 	}
 	startedAt := time.Now()
-	result := ImportResult{TransferID: transferID}
+	result := ImportResult{TransferID: transferID, Errors: []ImportRowError{}}
 	importContext, cancel := context.WithTimeout(ctx, importTimeout)
 	defer cancel()
 
-	headerReader := csv.NewReader(source)
-	header, err := headerReader.Read()
+	var contents []byte
+	var records []csvImportRecord
+	var header []string
+	if options.ErrorPolicy == ImportErrorPolicyContinue {
+		contents, err = io.ReadAll(source)
+		if err == nil {
+			header, records, err = parseCSVRecords(contents)
+		}
+	} else {
+		header, err = readCSVHeader(source)
+	}
 	if err != nil {
-		err = fmt.Errorf("read CSV header: %w", err)
-		finishDataTransferRun(transferID, 0, startedAt, err)
+		finishDataTransferRunWithErrors(transferID, 0, 0, startedAt, err)
 		return result, err
 	}
-	if len(header) == 0 {
-		err = fmt.Errorf("CSV header must contain at least one column")
-		finishDataTransferRun(transferID, 0, startedAt, err)
-		return result, err
-	}
-	header[0] = strings.TrimPrefix(header[0], "\ufeff")
 
 	pool, err := TargetPool(importContext, target)
 	if err != nil {
-		finishDataTransferRun(transferID, 0, startedAt, err)
+		finishDataTransferRunWithErrors(transferID, 0, 0, startedAt, err)
 		return result, err
 	}
 	defer pool.Release()
 
 	transaction, err := pool.Begin(importContext)
 	if err != nil {
-		finishDataTransferRun(transferID, 0, startedAt, err)
+		finishDataTransferRunWithErrors(transferID, 0, 0, startedAt, err)
 		return result, err
 	}
 	defer transaction.Rollback(context.Background())
 	if _, err = transaction.Exec(importContext, "SET LOCAL statement_timeout = '5min'"); err != nil {
-		finishDataTransferRun(transferID, 0, startedAt, err)
+		finishDataTransferRunWithErrors(transferID, 0, 0, startedAt, err)
 		return result, err
 	}
 
 	availableColumns, err := tableColumns(importContext, transaction, schemaName, tableName)
 	if err != nil {
-		finishDataTransferRun(transferID, 0, startedAt, err)
+		finishDataTransferRunWithErrors(transferID, 0, 0, startedAt, err)
 		return result, err
 	}
-	seenColumns := make(map[string]struct{}, len(header))
-	for _, column := range header {
-		if column == "" {
-			err = fmt.Errorf("CSV header contains a blank column")
-			finishDataTransferRun(transferID, 0, startedAt, err)
-			return result, err
-		}
-		if _, duplicate := seenColumns[column]; duplicate {
-			err = fmt.Errorf("CSV header contains duplicate column %q", column)
-			finishDataTransferRun(transferID, 0, startedAt, err)
-			return result, err
-		}
-		if _, exists := availableColumns[column]; !exists {
-			err = fmt.Errorf("column %q does not exist on %s.%s", column, schemaName, tableName)
-			finishDataTransferRun(transferID, 0, startedAt, err)
-			return result, err
-		}
-		seenColumns[column] = struct{}{}
+	if err = validateImportHeader(header, availableColumns, schemaName, tableName); err != nil {
+		finishDataTransferRunWithErrors(transferID, 0, 0, startedAt, err)
+		return result, err
 	}
-	if _, err = source.Seek(0, io.SeekStart); err != nil {
-		finishDataTransferRun(transferID, 0, startedAt, err)
+	if options.ErrorPolicy == ImportErrorPolicyAbort {
+		if _, err = source.Seek(0, io.SeekStart); err != nil {
+			finishDataTransferRunWithErrors(transferID, 0, 0, startedAt, err)
+			return result, err
+		}
+	} else if _, err = transaction.Exec(importContext, "SET CONSTRAINTS ALL IMMEDIATE"); err != nil {
+		finishDataTransferRunWithErrors(transferID, 0, 0, startedAt, err)
 		return result, err
 	}
 
@@ -530,18 +594,187 @@ func ImportCSV(ctx context.Context, target model.DatabaseTarget, schemaName stri
 	for index, column := range header {
 		quotedColumns[index] = pgx.Identifier{column}.Sanitize()
 	}
+	copyOptions := "FORMAT csv, ENCODING 'UTF8'"
+	if options.ErrorPolicy == ImportErrorPolicyAbort {
+		copyOptions += ", HEADER true"
+	}
 	copyStatement := fmt.Sprintf(
-		"COPY %s (%s) FROM STDIN WITH (FORMAT csv, HEADER true, ENCODING 'UTF8')",
+		"COPY %s (%s) FROM STDIN WITH (%s)",
 		pgx.Identifier{schemaName, tableName}.Sanitize(),
 		strings.Join(quotedColumns, ", "),
+		copyOptions,
 	)
-	commandTag, err := transaction.Conn().PgConn().CopyFrom(importContext, source, copyStatement)
+	if options.ErrorPolicy == ImportErrorPolicyAbort {
+		var commandTag pgconn.CommandTag
+		commandTag, err = transaction.Conn().PgConn().CopyFrom(importContext, source, copyStatement)
+		if err == nil {
+			result.RowCount = commandTag.RowsAffected()
+		}
+	} else {
+		err = importCSVRecords(importContext, transaction, copyStatement, contents, records, &result)
+	}
 	if err == nil {
-		result.RowCount = commandTag.RowsAffected()
 		err = transaction.Commit(importContext)
 	}
-	finishDataTransferRun(transferID, result.RowCount, startedAt, err)
+	if err != nil {
+		result.RowCount = 0
+	}
+	finishDataTransferRunWithErrors(transferID, result.RowCount, result.ErrorCount, startedAt, err)
 	return result, err
+}
+
+type csvImportRecord struct {
+	rowNumber int64
+	start     int
+	end       int
+}
+
+func inspectCSV(source io.Reader, previewLimit int) ([]string, [][]string, int64, error) {
+	reader := csv.NewReader(source)
+	header, err := reader.Read()
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("read CSV header: %w", err)
+	}
+	header = normalizeCSVHeader(header)
+	rows := make([][]string, 0, previewLimit)
+	var rowCount int64
+	for {
+		record, readErr := reader.Read()
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, nil, 0, fmt.Errorf("read CSV row %d: %w", rowCount+2, readErr)
+		}
+		rowCount++
+		if len(rows) < previewLimit {
+			rows = append(rows, record)
+		}
+	}
+	return header, rows, rowCount, nil
+}
+
+func readCSVHeader(source io.Reader) ([]string, error) {
+	header, err := csv.NewReader(source).Read()
+	if err != nil {
+		return nil, fmt.Errorf("read CSV header: %w", err)
+	}
+	return normalizeCSVHeader(header), nil
+}
+
+func parseCSVRecords(contents []byte) ([]string, []csvImportRecord, error) {
+	reader := csv.NewReader(bytes.NewReader(contents))
+	header, err := reader.Read()
+	if err != nil {
+		return nil, nil, fmt.Errorf("read CSV header: %w", err)
+	}
+	header = normalizeCSVHeader(header)
+	records := []csvImportRecord{}
+	for rowNumber := int64(2); ; rowNumber++ {
+		start := int(reader.InputOffset())
+		_, readErr := reader.Read()
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, nil, fmt.Errorf("read CSV row %d: %w", rowNumber, readErr)
+		}
+		records = append(records, csvImportRecord{rowNumber: rowNumber, start: start, end: int(reader.InputOffset())})
+	}
+	return header, records, nil
+}
+
+func normalizeCSVHeader(header []string) []string {
+	if len(header) > 0 {
+		header[0] = strings.TrimPrefix(header[0], "\ufeff")
+	}
+	return header
+}
+
+func validateImportHeader(header []string, availableColumns map[string]struct{}, schemaName string, tableName string) error {
+	if len(header) == 0 {
+		return fmt.Errorf("CSV header must contain at least one column")
+	}
+	seenColumns := make(map[string]struct{}, len(header))
+	for _, column := range header {
+		if column == "" {
+			return fmt.Errorf("CSV header contains a blank column")
+		}
+		if _, duplicate := seenColumns[column]; duplicate {
+			return fmt.Errorf("CSV header contains duplicate column %q", column)
+		}
+		if _, exists := availableColumns[column]; !exists {
+			return fmt.Errorf("column %q does not exist on %s.%s", column, schemaName, tableName)
+		}
+		seenColumns[column] = struct{}{}
+	}
+	return nil
+}
+
+func importCSVRecords(ctx context.Context, transaction pgx.Tx, copyStatement string, contents []byte, records []csvImportRecord, result *ImportResult) error {
+	for start := 0; start < len(records); start += importBatchSize {
+		end := min(start+importBatchSize, len(records))
+		if err := importCSVBatch(ctx, transaction, copyStatement, contents, records[start:end], result); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func importCSVBatch(ctx context.Context, transaction pgx.Tx, copyStatement string, contents []byte, records []csvImportRecord, result *ImportResult) error {
+	if len(records) == 0 {
+		return nil
+	}
+	savepoint, err := transaction.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	input := bytes.NewReader(contents[records[0].start:records[len(records)-1].end])
+	commandTag, copyErr := savepoint.Conn().PgConn().CopyFrom(ctx, input, copyStatement)
+	if copyErr == nil {
+		if err := savepoint.Commit(ctx); err != nil {
+			return err
+		}
+		result.RowCount += commandTag.RowsAffected()
+		return nil
+	}
+	if rollbackErr := savepoint.Rollback(ctx); rollbackErr != nil {
+		return fmt.Errorf("rollback failed CSV batch: %w", rollbackErr)
+	}
+	if ctx.Err() != nil || !isRecoverableImportError(copyErr) {
+		return copyErr
+	}
+	if len(records) == 1 {
+		result.ErrorCount++
+		if len(result.Errors) < importErrorSampleLimit {
+			result.Errors = append(result.Errors, ImportRowError{Row: records[0].rowNumber, Message: importRowErrorMessage(copyErr)})
+		}
+		return nil
+	}
+	middle := len(records) / 2
+	if err := importCSVBatch(ctx, transaction, copyStatement, contents, records[:middle], result); err != nil {
+		return err
+	}
+	return importCSVBatch(ctx, transaction, copyStatement, contents, records[middle:], result)
+}
+
+func isRecoverableImportError(err error) bool {
+	var postgresError *pgconn.PgError
+	if !errors.As(err, &postgresError) {
+		return false
+	}
+	return strings.HasPrefix(postgresError.Code, "22") || strings.HasPrefix(postgresError.Code, "23") || postgresError.Code == "P0001"
+}
+
+func importRowErrorMessage(err error) string {
+	var postgresError *pgconn.PgError
+	if !errors.As(err, &postgresError) {
+		return err.Error()
+	}
+	if postgresError.Detail != "" {
+		return postgresError.Message + ": " + postgresError.Detail
+	}
+	return postgresError.Message
 }
 
 func tableColumns(ctx context.Context, transaction pgx.Tx, schemaName string, tableName string) (map[string]struct{}, error) {
@@ -575,31 +808,41 @@ func tableColumns(ctx context.Context, transaction pgx.Tx, schemaName string, ta
 }
 
 func startDataTransferRun(ctx context.Context, target model.DatabaseTarget, actorEntityID string, direction string, schemaName string, tableName string, fileName string, statement string, format string) (string, error) {
+	return startDataTransferRunWithPolicy(ctx, target, actorEntityID, direction, schemaName, tableName, fileName, statement, format, "abort")
+}
+
+func startDataTransferRunWithPolicy(ctx context.Context, target model.DatabaseTarget, actorEntityID string, direction string, schemaName string, tableName string, fileName string, statement string, format string, errorPolicy string) (string, error) {
 	id := ulid.Make().Prefixed("xfer")
 	_, err := database.Pool.Exec(ctx, `
 		INSERT INTO data_transfer_run (
 			id, target_id, database_name, actor_entity_id, direction, schema_name,
-			table_name, file_name, statement, format, status
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'RUNNING')`,
-		id, target.ID, target.DatabaseName, actorEntityID, direction, schemaName, tableName, fileName, statement, format,
+			table_name, file_name, statement, format, error_policy, status
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'RUNNING')`,
+		id, target.ID, target.DatabaseName, actorEntityID, direction, schemaName, tableName, fileName, statement, format, errorPolicy,
 	)
 	return id, err
 }
 
 func finishDataTransferRun(id string, rowCount int64, startedAt time.Time, transferError error) {
+	finishDataTransferRunWithErrors(id, rowCount, 0, startedAt, transferError)
+}
+
+func finishDataTransferRunWithErrors(id string, rowCount int64, errorCount int64, startedAt time.Time, transferError error) {
 	status := "SUCCEEDED"
 	errorMessage := ""
 	if transferError != nil {
 		status = "FAILED"
 		errorMessage = transferError.Error()
+	} else if errorCount > 0 {
+		status = "SUCCEEDED_WITH_ERRORS"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	completedAt := time.Now()
 	if _, err := database.Pool.Exec(ctx, `
 		UPDATE data_transfer_run
-		SET status = $2, row_count = $3, duration_ms = $4, error_message = $5, completed_at = $6
-		WHERE id = $1`, id, status, rowCount, completedAt.Sub(startedAt).Milliseconds(), errorMessage, completedAt); err != nil {
+		SET status = $2, row_count = $3, error_count = $4, duration_ms = $5, error_message = $6, completed_at = $7
+		WHERE id = $1`, id, status, rowCount, errorCount, completedAt.Sub(startedAt).Milliseconds(), errorMessage, completedAt); err != nil {
 		logger.SugarLogger.Errorf("Failed to finalize data transfer %s: %v", id, err)
 	}
 }

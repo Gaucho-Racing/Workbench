@@ -61,6 +61,7 @@ func ExportQuery(c *gin.Context) {
 		TargetID     string `json:"target_id" binding:"required"`
 		DatabaseName string `json:"database_name"`
 		Statement    string `json:"statement" binding:"required"`
+		SourceName   string `json:"source_name"`
 		Format       string `json:"format" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -96,8 +97,12 @@ func ExportQuery(c *gin.Context) {
 		return
 	}
 
+	sourceName := strings.TrimSpace(request.SourceName)
+	if sourceName == "" {
+		sourceName = "query"
+	}
 	timestamp := time.Now().Format("20060102-150405")
-	fileName := fmt.Sprintf("%s-%s-%s.%s", safeFileName(target.Name), safeFileName(target.DatabaseName), timestamp, exportFormat.Extension())
+	fileName := fmt.Sprintf("%s-%s-%s-%s.%s", safeFileName(target.Name), safeFileName(target.DatabaseName), safeFileName(sourceName), timestamp, exportFormat.Extension())
 	c.Header("Content-Type", exportFormat.ContentType())
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
 	transferID, err := service.ExportQuery(
@@ -122,6 +127,67 @@ func ExportQuery(c *gin.Context) {
 }
 
 func ImportCSV(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxImportRequestBytes)
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "a CSV file up to 50 MB is required"})
+		return
+	}
+	if c.Request.MultipartForm != nil {
+		defer c.Request.MultipartForm.RemoveAll()
+	}
+	databaseName := strings.TrimSpace(c.PostForm("database_name"))
+	schemaName := strings.TrimSpace(c.PostForm("schema"))
+	tableName := strings.TrimSpace(c.PostForm("table"))
+	errorPolicyValue := strings.TrimSpace(c.PostForm("error_policy"))
+	if errorPolicyValue == "" {
+		errorPolicyValue = string(service.ImportErrorPolicyAbort)
+	}
+	if databaseName == "" || schemaName == "" || tableName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "database_name, schema, and table are required"})
+		return
+	}
+	errorPolicy, err := service.ParseImportErrorPolicy(errorPolicyValue)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	target, err := service.GetTarget(c.Request.Context(), c.Param("id"))
+	if errors.Is(err, service.ErrTargetNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	target, err = service.SelectDatabase(c.Request.Context(), target, databaseName)
+	if errors.Is(err, service.ErrDatabaseUnavailable) {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "open uploaded CSV: " + err.Error()})
+		return
+	}
+	defer file.Close()
+	result, err := service.ImportCSV(
+		c.Request.Context(), target, schemaName, tableName, filepath.Base(fileHeader.Filename), file, getRequestTokenEntityID(c),
+		service.ImportOptions{ErrorPolicy: errorPolicy},
+	)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "transfer_id": result.TransferID})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func PreviewCSVImport(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxImportRequestBytes)
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
@@ -162,14 +228,12 @@ func ImportCSV(c *gin.Context) {
 		return
 	}
 	defer file.Close()
-	result, err := service.ImportCSV(
-		c.Request.Context(), target, schemaName, tableName, filepath.Base(fileHeader.Filename), file, getRequestTokenEntityID(c),
-	)
+	preview, err := service.PreviewCSVImport(c.Request.Context(), target, schemaName, tableName, file)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "transfer_id": result.TransferID})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, result)
+	c.JSON(http.StatusOK, preview)
 }
 
 func safeFileName(value string) string {

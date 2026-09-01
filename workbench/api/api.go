@@ -97,6 +97,7 @@ func initializeRoutes(router *gin.Engine) {
 	admin.PATCH("/targets/:id", UpdateTarget)
 	admin.DELETE("/targets/:id", DeleteTarget)
 	admin.POST("/targets/:id/test", TestTarget)
+	admin.POST("/targets/:id/imports/preview", PreviewCSVImport)
 	admin.POST("/targets/:id/imports", ImportCSV)
 }
 

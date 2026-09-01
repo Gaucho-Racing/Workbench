@@ -24,6 +24,7 @@ type ExportDialogProps = {
   target: DatabaseTarget
   databaseName: string
   statement: string
+  sourceName: string
   format: ExportFormat
   onFormatChange: (format: ExportFormat) => void
 }
@@ -42,7 +43,7 @@ const formatLabels: Record<ExportFormat, string> = {
   sql: "SQL",
 }
 
-export function ExportDialog({ open, onOpenChange, target, databaseName, statement, format, onFormatChange }: ExportDialogProps) {
+export function ExportDialog({ open, onOpenChange, target, databaseName, statement, sourceName, format, onFormatChange }: ExportDialogProps) {
   const [downloading, setDownloading] = useState(false)
   const previewQuery = useQuery({
     queryKey: ["exportPreview", target.id, databaseName, statement],
@@ -75,11 +76,11 @@ export function ExportDialog({ open, onOpenChange, target, databaseName, stateme
     try {
       const response = await api.post<Blob>(
         "/exports",
-        { target_id: target.id, database_name: databaseName, statement, format },
+        { target_id: target.id, database_name: databaseName, statement, source_name: sourceName, format },
         { responseType: "blob" },
       )
       const disposition = String(response.headers["content-disposition"] ?? "")
-      const fileName = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? `${databaseName}-export.${format}`
+      const fileName = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? `${target.name}-${databaseName}-${sourceName}-export.${format}`
       const url = URL.createObjectURL(response.data)
       const link = document.createElement("a")
       link.href = url

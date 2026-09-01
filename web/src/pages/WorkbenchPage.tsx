@@ -416,7 +416,7 @@ export default function WorkbenchPage() {
     statementDecoration.current?.clear()
     statementRailElement.current?.remove()
     statementIndicatorDisposables.current.forEach((disposable) => disposable.dispose())
-    const decoration = editor.createDecorationsCollection()
+    let decoration = editor.createDecorationsCollection()
     const rail = document.createElement("div")
     rail.className = "workbench-statement-rail"
     rail.setAttribute("aria-hidden", "true")
@@ -455,11 +455,17 @@ export default function WorkbenchPage() {
       statementIndicatorStatus.current = "idle"
       updateStatementIndicator()
     }
+    const resetStatementIndicatorForModel = () => {
+      decoration.clear()
+      decoration = editor.createDecorationsCollection()
+      statementDecoration.current = decoration
+      resetStatementIndicator()
+    }
     updateStatementIndicatorRef.current = updateStatementIndicator
     statementIndicatorDisposables.current = [
       editor.onDidChangeCursorSelection(resetStatementIndicator),
       editor.onDidChangeModelContent(resetStatementIndicator),
-      editor.onDidChangeModel(resetStatementIndicator),
+      editor.onDidChangeModel(resetStatementIndicatorForModel),
       editor.onDidScrollChange(updateStatementIndicator),
       editor.onDidLayoutChange(updateStatementIndicator),
     ]

@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { api, getErrorMessage } from "@/lib/api"
 import type { DatabaseTarget } from "@/lib/database"
 
@@ -76,15 +77,14 @@ export function ConnectionDialog({ open, onOpenChange, onCreated }: ConnectionDi
               <Input value={form.name} onChange={(event) => update("name", event.target.value)} placeholder="Sentinel" required />
             </Field>
             <Field label="Environment">
-              <select
-                className="h-8 rounded-md border border-input bg-black/20 px-2 text-sm outline-none focus:border-ring"
-                value={form.environment}
-                onChange={(event) => update("environment", event.target.value)}
-              >
-                <option>DEV</option>
-                <option>STAGING</option>
-                <option>PROD</option>
-              </select>
+              <Select value={form.environment} onValueChange={(value) => update("environment", value)}>
+                <SelectTrigger aria-label="Environment"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="DEV">DEV</SelectItem>
+                  <SelectItem value="STAGING">STAGING</SelectItem>
+                  <SelectItem value="PROD">PROD</SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
           </div>
           <div className="grid grid-cols-[1fr_100px] gap-3">
@@ -92,7 +92,7 @@ export function ConnectionDialog({ open, onOpenChange, onCreated }: ConnectionDi
               <Input value={form.host} onChange={(event) => update("host", event.target.value)} placeholder="postgres.internal" required />
             </Field>
             <Field label="Port">
-              <Input type="number" min={1} max={65535} value={form.port} onChange={(event) => update("port", event.target.value)} required />
+              <Input inputMode="numeric" pattern="[0-9]*" maxLength={5} value={form.port} onChange={(event) => update("port", event.target.value.replace(/\D/g, ""))} required />
             </Field>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -108,17 +108,16 @@ export function ConnectionDialog({ open, onOpenChange, onCreated }: ConnectionDi
               <Input type="password" value={form.password} onChange={(event) => update("password", event.target.value)} required />
             </Field>
             <Field label="TLS mode">
-              <select
-                className="h-8 rounded-md border border-input bg-black/20 px-2 text-sm outline-none focus:border-ring"
-                value={form.ssl_mode}
-                onChange={(event) => update("ssl_mode", event.target.value)}
-              >
-                <option value="require">Require</option>
-                <option value="verify-full">Verify full</option>
-                <option value="verify-ca">Verify CA</option>
-                <option value="prefer">Prefer</option>
-                <option value="disable">Disable</option>
-              </select>
+              <Select value={form.ssl_mode} onValueChange={(value) => update("ssl_mode", value)}>
+                <SelectTrigger aria-label="TLS mode"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="require">Require</SelectItem>
+                  <SelectItem value="verify-full">Verify full</SelectItem>
+                  <SelectItem value="verify-ca">Verify CA</SelectItem>
+                  <SelectItem value="prefer">Prefer</SelectItem>
+                  <SelectItem value="disable">Disable</SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
           </div>
           {mutation.isError && (

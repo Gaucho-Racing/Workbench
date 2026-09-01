@@ -9,7 +9,7 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/85",
+        default: "bg-gradient-to-r from-gr-purple to-gr-pink text-primary-foreground shadow-sm shadow-gr-purple/15 hover:brightness-110",
         outline: "border border-border bg-transparent hover:bg-muted",
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/75",
         ghost: "hover:bg-muted hover:text-foreground",
@@ -51,4 +51,3 @@ function Button({
 }
 
 export { Button }
-

@@ -30,6 +30,8 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-gr-pink: var(--gr-pink);
+  --color-gr-purple: var(--gr-purple);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -37,24 +39,26 @@
 }
 
 :root {
+  --gr-pink: #e105a3;
+  --gr-purple: #8412fc;
   --background: #0c0b10;
   --foreground: #f3f1f6;
   --card: #111016;
   --card-foreground: #f3f1f6;
   --popover: #17151d;
   --popover-foreground: #f3f1f6;
-  --primary: #9f4cff;
+  --primary: var(--gr-purple);
   --primary-foreground: #ffffff;
   --secondary: #22202a;
   --secondary-foreground: #eeeaf4;
   --muted: #1c1a22;
   --muted-foreground: #9893a3;
-  --accent: #2a2031;
+  --accent: color-mix(in oklab, var(--gr-pink) 12%, #211d28);
   --accent-foreground: #f3dff0;
   --destructive: #ff5b71;
   --border: rgb(255 255 255 / 8%);
   --input: rgb(255 255 255 / 11%);
-  --ring: #e105a3;
+  --ring: var(--gr-pink);
   --radius: 0.45rem;
 }
 
@@ -73,6 +77,9 @@
 
   body {
     @apply overflow-hidden bg-background font-sans text-foreground antialiased;
+    background-image:
+      radial-gradient(circle at 8% 0%, rgb(132 18 252 / 8%), transparent 28%),
+      radial-gradient(circle at 92% 100%, rgb(225 5 163 / 6%), transparent 30%);
   }
 
   button:not(:disabled),
@@ -81,8 +88,27 @@
   }
 }
 
+@keyframes brand-pulse {
+  0%, 100% {
+    box-shadow: 0 0 16px rgb(132 18 252 / 16%);
+  }
+  50% {
+    box-shadow: 0 0 22px rgb(225 5 163 / 22%);
+  }
+}
+
+.brand-beacon {
+  animation: brand-pulse 4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-beacon {
+    animation: none;
+  }
+}
+
 ::selection {
-  background: rgb(159 76 255 / 35%);
+  background: color-mix(in oklab, var(--gr-purple) 32%, var(--gr-pink) 16%);
 }
 
 * {

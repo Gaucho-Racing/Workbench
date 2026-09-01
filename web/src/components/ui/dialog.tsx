@@ -23,7 +23,7 @@ function DialogContent({ className, children, ...props }: React.ComponentProps<t
       <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/70 backdrop-blur-[2px]" />
       <DialogPrimitive.Content
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-5 rounded-xl border bg-popover p-5 shadow-2xl outline-none",
+          "fixed top-1/2 left-1/2 z-50 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-5 overflow-hidden rounded-xl border bg-popover p-5 shadow-2xl shadow-gr-purple/10 outline-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-gr-purple before:via-gr-pink before:to-transparent",
           className,
         )}
         {...props}

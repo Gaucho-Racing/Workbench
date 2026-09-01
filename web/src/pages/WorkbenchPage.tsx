@@ -25,7 +25,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
-import { ConnectionDialog } from "@/components/ConnectionDialog"
+import { ConfirmationDialog } from "@/components/ConfirmationDialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { api, getErrorMessage } from "@/lib/api"
@@ -49,6 +49,9 @@ const initialStatement = `select
 const SchemaDiagram = lazy(() =>
   import("@/components/SchemaDiagram").then((module) => ({ default: module.SchemaDiagram })),
 )
+const ConnectionDialog = lazy(() =>
+  import("@/components/ConnectionDialog").then((module) => ({ default: module.ConnectionDialog })),
+)
 
 export default function WorkbenchPage() {
   const queryClient = useQueryClient()
@@ -64,6 +67,8 @@ export default function WorkbenchPage() {
   const [bottomTab, setBottomTab] = useState<"results" | "history">("results")
   const [filter, setFilter] = useState("")
   const [workspaceView, setWorkspaceView] = useState<"query" | "diagram">("query")
+  const [targetPendingDeletion, setTargetPendingDeletion] = useState<DatabaseTarget | null>(null)
+  const [deletingTarget, setDeletingTarget] = useState(false)
   const abortController = useRef<AbortController | null>(null)
 
   const targets = useMemo(() => targetsQuery.data ?? [], [targetsQuery.data])
@@ -150,13 +155,16 @@ export default function WorkbenchPage() {
   }
 
   async function deleteTarget(target: DatabaseTarget) {
-    if (!window.confirm(`Remove the ${target.name} connection from Workbench?`)) return
+    setDeletingTarget(true)
     try {
       await api.delete(`/targets/${target.id}`)
       await queryClient.invalidateQueries({ queryKey: ["targets"] })
+      setTargetPendingDeletion(null)
       toast.success(`${target.name} removed`)
     } catch (error) {
       toast.error(getErrorMessage(error))
+    } finally {
+      setDeletingTarget(false)
     }
   }
 
@@ -165,15 +173,15 @@ export default function WorkbenchPage() {
   }
 
   return (
-    <div className="grid h-full grid-rows-[46px_minmax(0,1fr)] bg-background">
-      <header className="flex items-center gap-3 border-b bg-[#0f0e13] px-2.5">
+    <div className="grid h-full grid-rows-[46px_minmax(0,1fr)] bg-[radial-gradient(circle_at_12%_0%,rgba(132,18,252,0.07),transparent_25%),radial-gradient(circle_at_88%_100%,rgba(225,5,163,0.05),transparent_28%),#0c0b10]">
+      <header className="flex items-center gap-3 border-b bg-[linear-gradient(90deg,rgba(132,18,252,0.10),rgba(15,14,19,0.97)_34%,rgba(225,5,163,0.08))] px-2.5 backdrop-blur-xl">
         <Button variant="ghost" size="icon-sm" className="lg:hidden" onClick={() => setSidebarOpen(!sidebarOpen)}>
           <Menu />
           <span className="sr-only">Toggle connections</span>
         </Button>
         <div className="flex items-center gap-2 pr-3">
-          <div className="grid size-7 place-items-center rounded-md bg-primary/15">
-            <DatabaseZap className="size-4 text-primary" />
+          <div className="brand-beacon grid size-7 place-items-center rounded-md bg-gradient-to-br from-gr-purple to-gr-pink">
+            <DatabaseZap className="size-4 text-white" />
           </div>
           <span className="font-brand text-sm font-semibold tracking-tight">Workbench</span>
         </div>
@@ -214,7 +222,7 @@ export default function WorkbenchPage() {
 
       <div className={cn("grid min-h-0", sidebarOpen ? "grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)]")}>
         {sidebarOpen && (
-          <aside className="absolute inset-y-[46px] left-0 z-20 flex w-[280px] flex-col border-r bg-[#0f0e13] lg:static lg:inset-auto lg:z-auto">
+          <aside className="absolute inset-y-[46px] left-0 z-20 flex w-[280px] flex-col border-r bg-[linear-gradient(180deg,rgba(132,18,252,0.055),#0f0e13_28%,rgba(225,5,163,0.025))] lg:static lg:inset-auto lg:z-auto">
             <div className="flex h-10 items-center border-b px-2.5">
               <span className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Explorer</span>
               <div className="ml-auto flex gap-0.5">
@@ -263,7 +271,7 @@ export default function WorkbenchPage() {
                   filter={filter}
                   onSelect={() => setSelectedTargetID(target.id)}
                   onOpenTable={openTable}
-                  onDelete={() => void deleteTarget(target)}
+                  onDelete={() => setTargetPendingDeletion(target)}
                 />
               ))}
             </div>
@@ -277,10 +285,10 @@ export default function WorkbenchPage() {
               <span className="sr-only">Show explorer</span>
             </Button>
           )}
-          <section className="min-h-0 border-b bg-[#0d0c11] pt-1">
+          <section className="min-h-0 border-b bg-[radial-gradient(circle_at_92%_0%,rgba(225,5,163,0.045),transparent_34%),#0d0c11] pt-1">
             <div className="flex h-8 items-center border-b px-3 text-xs">
-              <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 font-mono text-[11px]", workspaceView === "query" ? "border-primary text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("query")}>query.sql</button>
-              <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 text-[11px]", workspaceView === "diagram" ? "border-primary text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("diagram")}><GitFork className="size-3" /> Diagram</button>
+              <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 font-mono text-[11px]", workspaceView === "query" ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("query")}>query.sql</button>
+              <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 text-[11px]", workspaceView === "diagram" ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("diagram")}><GitFork className="size-3" /> Diagram</button>
               <span className="ml-2 text-muted-foreground">{selectedTarget?.database_name ?? "disconnected"}</span>
             </div>
             <div className="h-[calc(100%-2rem)]">
@@ -314,7 +322,7 @@ export default function WorkbenchPage() {
             </div>
           </section>
 
-          <section className="grid min-h-0 grid-rows-[36px_minmax(0,1fr)] bg-[#0f0e13]">
+          <section className="grid min-h-0 grid-rows-[36px_minmax(0,1fr)] bg-[radial-gradient(circle_at_8%_100%,rgba(132,18,252,0.04),transparent_36%),#0f0e13]">
             <div className="flex items-center border-b px-2">
               <BottomTab active={bottomTab === "results"} onClick={() => setBottomTab("results")}>
                 <Columns3 /> Results {result && <span className="text-muted-foreground">{result.row_count}</span>}
@@ -345,10 +353,25 @@ export default function WorkbenchPage() {
         </main>
       </div>
 
-      <ConnectionDialog
-        open={connectionDialogOpen}
-        onOpenChange={setConnectionDialogOpen}
-        onCreated={(target) => setSelectedTargetID(target.id)}
+      {connectionDialogOpen && (
+        <Suspense fallback={null}>
+          <ConnectionDialog
+            open
+            onOpenChange={setConnectionDialogOpen}
+            onCreated={(target) => setSelectedTargetID(target.id)}
+          />
+        </Suspense>
+      )}
+      <ConfirmationDialog
+        open={targetPendingDeletion !== null}
+        title="Remove database connection?"
+        description={targetPendingDeletion
+          ? `Workbench will forget ${targetPendingDeletion.name} and its saved credentials. Existing query history will remain available.`
+          : ""}
+        confirmLabel="Remove connection"
+        pending={deletingTarget}
+        onOpenChange={(open) => !open && setTargetPendingDeletion(null)}
+        onConfirm={() => targetPendingDeletion && void deleteTarget(targetPendingDeletion)}
       />
     </div>
   )
@@ -387,13 +410,13 @@ function TargetTree({
   return (
     <div>
       <div
-        className={cn("group flex h-8 items-center gap-1.5 px-2 text-xs", selected ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted/50")}
+        className={cn("group flex h-8 items-center gap-1.5 px-2 text-xs", selected ? "bg-[linear-gradient(90deg,rgba(132,18,252,0.17),rgba(225,5,163,0.07),transparent)] text-foreground" : "text-muted-foreground hover:bg-muted/50")}
       >
         <button className="grid size-5 place-items-center" onClick={() => setExpanded(!expanded)}>
           {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
         </button>
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onSelect}>
-          <Database className={cn("size-3.5", selected && "text-primary")} />
+          <Database className={cn("size-3.5", selected && "text-gr-pink")} />
           <span className="truncate font-medium">{target.name}</span>
           <EnvironmentBadge environment={target.environment} />
         </button>
@@ -493,7 +516,7 @@ function HistoryPanel({ runs, loading, onSelect }: { runs: QueryRun[]; loading: 
 
 function BottomTab({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) {
   return (
-    <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 text-xs", active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground", "[&_svg]:size-3.5")} onClick={onClick}>
+    <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 text-xs", active ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground hover:text-foreground", "[&_svg]:size-3.5")} onClick={onClick}>
       {children}
     </button>
   )

@@ -299,7 +299,7 @@ export default function WorkbenchPage() {
                 <Input className="h-7 pl-7 text-xs" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter database objects" />
               </div>
             </div>
-            <div className="min-h-0 flex-1 touch-pan-y overflow-x-hidden overflow-y-auto overscroll-contain py-1.5 [scrollbar-gutter:stable]">
+            <div className="min-h-0 flex-1 touch-pan-y overflow-x-hidden overflow-y-auto overscroll-contain pb-1.5 [scrollbar-gutter:stable]">
               {targetsQuery.isLoading && <SidebarMessage>Loading connections…</SidebarMessage>}
               {!targetsQuery.isLoading && targets.length === 0 && (
                 <div className="px-4 py-10 text-center">

@@ -979,12 +979,11 @@ function SessionModeControl({
   attentionKey: number
   onModeChange: (mode: SessionMode) => void
 }) {
+  const helperVisible = Boolean(error) || !isAdmin || mode === "write"
   const helperMessage = error
     || (!isAdmin
       ? "WorkbenchAdmins membership is required for writes."
-      : mode === "write"
-        ? "Writes and schema changes are enabled for this session."
-        : "")
+      : "Writes and schema changes are enabled for this session.")
 
   return (
     <div className="shrink-0 border-t bg-[#0d0c11] p-2">
@@ -1062,13 +1061,13 @@ function SessionModeControl({
         <div
           className={cn(
             "grid transition-[grid-template-rows,opacity,margin-top] duration-400 [transition-timing-function:cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
-            helperMessage ? "mt-2 grid-rows-[1fr] opacity-100" : "mt-0 grid-rows-[0fr] opacity-0",
+            helperVisible ? "mt-2 grid-rows-[1fr] opacity-100" : "mt-0 grid-rows-[0fr] opacity-0",
           )}
         >
           <div className="min-h-0 overflow-hidden">
             <p
               role={error ? "alert" : undefined}
-              aria-hidden={!helperMessage}
+              aria-hidden={!helperVisible}
               className={cn(
                 "px-0.5 text-[10px] leading-relaxed",
                 error ? "text-destructive" : "text-muted-foreground",

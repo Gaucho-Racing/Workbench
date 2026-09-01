@@ -61,6 +61,7 @@ func initializeRouter() *gin.Engine {
 		AllowAllOrigins:  true,
 		AllowMethods:     []string{"GET", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Disposition"},
 		AllowCredentials: false,
 		MaxAge:           12 * time.Hour,
 	}))
@@ -86,6 +87,7 @@ func initializeRoutes(router *gin.Engine) {
 	member.GET("/targets/:id/catalog", GetCatalog)
 	member.POST("/queries", ExecuteQuery)
 	member.GET("/queries", ListQueryRuns)
+	member.POST("/exports", ExportQueryCSV)
 
 	admin := authenticated.Group("")
 	admin.Use(requireWorkbenchAdmin())
@@ -93,6 +95,7 @@ func initializeRoutes(router *gin.Engine) {
 	admin.PATCH("/targets/:id", UpdateTarget)
 	admin.DELETE("/targets/:id", DeleteTarget)
 	admin.POST("/targets/:id/test", TestTarget)
+	admin.POST("/targets/:id/imports", ImportCSV)
 }
 
 func authChecker() gin.HandlerFunc {

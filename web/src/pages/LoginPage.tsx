@@ -72,7 +72,7 @@ export default function LoginPage() {
     <main className="relative flex h-full items-center justify-center overflow-hidden bg-background px-6">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_35%_25%,rgba(132,18,252,0.14),transparent_34%),radial-gradient(circle_at_68%_62%,rgba(225,5,163,0.10),transparent_38%)]" />
       <div className="relative flex w-full max-w-sm flex-col items-center text-center">
-        <div className="brand-beacon mb-5 grid size-12 place-items-center rounded-xl border border-white/10 bg-gradient-to-br from-gr-purple to-gr-pink shadow-2xl">
+        <div className="mb-5 grid size-12 place-items-center rounded-xl border border-white/10 bg-gradient-to-br from-gr-purple to-gr-pink shadow-2xl shadow-gr-purple/15">
           <DatabaseZap className="size-6 text-white" />
         </div>
         <h1 className="text-xl font-semibold tracking-tight">Workbench</h1>

@@ -173,14 +173,14 @@ export default function WorkbenchPage() {
   }
 
   return (
-    <div className="grid h-full grid-rows-[46px_minmax(0,1fr)] bg-[radial-gradient(circle_at_12%_0%,rgba(132,18,252,0.07),transparent_25%),radial-gradient(circle_at_88%_100%,rgba(225,5,163,0.05),transparent_28%),#0c0b10]">
-      <header className="flex items-center gap-3 border-b bg-[linear-gradient(90deg,rgba(132,18,252,0.10),rgba(15,14,19,0.97)_34%,rgba(225,5,163,0.08))] px-2.5 backdrop-blur-xl">
+    <div className="grid h-full grid-rows-[46px_minmax(0,1fr)] bg-background">
+      <header className="flex items-center gap-3 border-b bg-[#0f0e13] px-2.5 shadow-[inset_0_-1px_0_rgba(225,5,163,0.06)]">
         <Button variant="ghost" size="icon-sm" className="lg:hidden" onClick={() => setSidebarOpen(!sidebarOpen)}>
           <Menu />
           <span className="sr-only">Toggle connections</span>
         </Button>
         <div className="flex items-center gap-2 pr-3">
-          <div className="brand-beacon grid size-7 place-items-center rounded-md bg-gradient-to-br from-gr-purple to-gr-pink">
+          <div className="grid size-7 place-items-center rounded-md bg-gradient-to-br from-gr-purple to-gr-pink shadow-sm shadow-gr-purple/20">
             <DatabaseZap className="size-4 text-white" />
           </div>
           <span className="font-brand text-sm font-semibold tracking-tight">Workbench</span>
@@ -222,7 +222,7 @@ export default function WorkbenchPage() {
 
       <div className={cn("grid min-h-0", sidebarOpen ? "grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)]")}>
         {sidebarOpen && (
-          <aside className="absolute inset-y-[46px] left-0 z-20 flex w-[280px] flex-col border-r bg-[linear-gradient(180deg,rgba(132,18,252,0.055),#0f0e13_28%,rgba(225,5,163,0.025))] lg:static lg:inset-auto lg:z-auto">
+          <aside className="absolute inset-y-[46px] left-0 z-20 flex w-[280px] flex-col border-r bg-[#0f0e13] lg:static lg:inset-auto lg:z-auto">
             <div className="flex h-10 items-center border-b px-2.5">
               <span className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Explorer</span>
               <div className="ml-auto flex gap-0.5">
@@ -285,7 +285,7 @@ export default function WorkbenchPage() {
               <span className="sr-only">Show explorer</span>
             </Button>
           )}
-          <section className="min-h-0 border-b bg-[radial-gradient(circle_at_92%_0%,rgba(225,5,163,0.045),transparent_34%),#0d0c11] pt-1">
+          <section className="min-h-0 border-b bg-[#0d0c11] pt-1">
             <div className="flex h-8 items-center border-b px-3 text-xs">
               <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 font-mono text-[11px]", workspaceView === "query" ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("query")}>query.sql</button>
               <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 text-[11px]", workspaceView === "diagram" ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("diagram")}><GitFork className="size-3" /> Diagram</button>
@@ -322,7 +322,7 @@ export default function WorkbenchPage() {
             </div>
           </section>
 
-          <section className="grid min-h-0 grid-rows-[36px_minmax(0,1fr)] bg-[radial-gradient(circle_at_8%_100%,rgba(132,18,252,0.04),transparent_36%),#0f0e13]">
+          <section className="grid min-h-0 grid-rows-[36px_minmax(0,1fr)] bg-[#0f0e13]">
             <div className="flex items-center border-b px-2">
               <BottomTab active={bottomTab === "results"} onClick={() => setBottomTab("results")}>
                 <Columns3 /> Results {result && <span className="text-muted-foreground">{result.row_count}</span>}
@@ -410,7 +410,7 @@ function TargetTree({
   return (
     <div>
       <div
-        className={cn("group flex h-8 items-center gap-1.5 px-2 text-xs", selected ? "bg-[linear-gradient(90deg,rgba(132,18,252,0.17),rgba(225,5,163,0.07),transparent)] text-foreground" : "text-muted-foreground hover:bg-muted/50")}
+        className={cn("group flex h-8 items-center gap-1.5 border-l-2 px-2 text-xs", selected ? "border-gr-pink bg-gr-purple/10 text-foreground" : "border-transparent text-muted-foreground hover:bg-muted/50")}
       >
         <button className="grid size-5 place-items-center" onClick={() => setExpanded(!expanded)}>
           {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}

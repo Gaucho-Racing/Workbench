@@ -77,33 +77,11 @@
 
   body {
     @apply overflow-hidden bg-background font-sans text-foreground antialiased;
-    background-image:
-      radial-gradient(circle at 8% 0%, rgb(132 18 252 / 8%), transparent 28%),
-      radial-gradient(circle at 92% 100%, rgb(225 5 163 / 6%), transparent 30%);
   }
 
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]) {
     cursor: pointer;
-  }
-}
-
-@keyframes brand-pulse {
-  0%, 100% {
-    box-shadow: 0 0 16px rgb(132 18 252 / 16%);
-  }
-  50% {
-    box-shadow: 0 0 22px rgb(225 5 163 / 22%);
-  }
-}
-
-.brand-beacon {
-  animation: brand-pulse 4s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .brand-beacon {
-    animation: none;
   }
 }
 

@@ -20,7 +20,8 @@ import type { DatabaseTarget } from "@/lib/database"
 type ConnectionDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onCreated: (target: DatabaseTarget) => void
+  target?: DatabaseTarget | null
+  onSaved: (target: DatabaseTarget) => void
 }
 
 const initialForm = {
@@ -34,22 +35,39 @@ const initialForm = {
   ssl_mode: "require",
 }
 
-export function ConnectionDialog({ open, onOpenChange, onCreated }: ConnectionDialogProps) {
+function formForTarget(target?: DatabaseTarget | null) {
+  if (!target) return initialForm
+  return {
+    name: target.name,
+    environment: target.environment,
+    host: target.host,
+    port: String(target.port),
+    database_name: target.database_name,
+    username: target.username,
+    password: "",
+    ssl_mode: target.ssl_mode,
+  }
+}
+
+export function ConnectionDialog({ open, onOpenChange, target, onSaved }: ConnectionDialogProps) {
   const queryClient = useQueryClient()
-  const [form, setForm] = useState(initialForm)
+  const editing = !!target
+  const [form, setForm] = useState(() => formForTarget(target))
   const mutation = useMutation({
-    mutationFn: async () =>
-      (
-        await api.post<DatabaseTarget>("/targets", {
-          ...form,
-          port: Number(form.port),
-        })
-      ).data,
+    mutationFn: async () => {
+      const payload = { ...form, port: Number(form.port) }
+      return editing
+        ? (await api.patch<DatabaseTarget>(`/targets/${target.id}`, payload)).data
+        : (await api.post<DatabaseTarget>("/targets", payload)).data
+    },
     onSuccess: async (target) => {
-      await queryClient.invalidateQueries({ queryKey: ["targets"] })
-      setForm(initialForm)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["targets"] }),
+        queryClient.invalidateQueries({ queryKey: ["databases"] }),
+        queryClient.invalidateQueries({ queryKey: ["catalog"] }),
+      ])
       onOpenChange(false)
-      onCreated(target)
+      onSaved(target)
     },
   })
 
@@ -66,9 +84,11 @@ export function ConnectionDialog({ open, onOpenChange, onCreated }: ConnectionDi
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New database connection</DialogTitle>
+          <DialogTitle>{editing ? "Edit database connection" : "New database connection"}</DialogTitle>
           <DialogDescription>
-            Credentials are encrypted before they are stored. The connection is tested before it is saved.
+            {editing
+              ? "Leave the password blank to keep the current credential. Changes are tested before they are saved."
+              : "Credentials are encrypted before they are stored. The connection is tested before it is saved."}
           </DialogDescription>
         </DialogHeader>
         <form className="grid gap-4" onSubmit={submit}>
@@ -105,7 +125,7 @@ export function ConnectionDialog({ open, onOpenChange, onCreated }: ConnectionDi
           </div>
           <div className="grid grid-cols-[1fr_140px] gap-3">
             <Field label="Password">
-              <Input type="password" value={form.password} onChange={(event) => update("password", event.target.value)} required />
+              <Input type="password" value={form.password} onChange={(event) => update("password", event.target.value)} placeholder={editing ? "Keep current password" : undefined} required={!editing} />
             </Field>
             <Field label="TLS mode">
               <Select value={form.ssl_mode} onValueChange={(value) => update("ssl_mode", value)}>
@@ -130,7 +150,7 @@ export function ConnectionDialog({ open, onOpenChange, onCreated }: ConnectionDi
               Cancel
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Testing connection…" : "Connect"}
+              {mutation.isPending ? "Testing connection…" : editing ? "Save changes" : "Connect"}
             </Button>
           </DialogFooter>
         </form>

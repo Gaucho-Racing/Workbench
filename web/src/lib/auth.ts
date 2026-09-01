@@ -4,6 +4,9 @@ import { api } from "@/lib/api"
 
 const SESSION_KEY = "workbench_session"
 
+export const WORKBENCH_VIEWER_GROUP = "WorkbenchViewers"
+export const WORKBENCH_ADMIN_GROUP = "WorkbenchAdmins"
+
 export type Session = {
   accessToken: string
   refreshToken: string
@@ -18,6 +21,13 @@ export type CurrentUser = {
   last_name: string
   email: string
   avatar_url: string
+  groups: string[]
+}
+
+type WorkbenchSession = {
+  entity_id: string
+  user_id: string
+  client_id: string
   groups: string[]
 }
 
@@ -59,6 +69,13 @@ export function useAuth() {
     retry: false,
     staleTime: 5 * 60 * 1000,
   })
+  const sessionQuery = useQuery({
+    queryKey: ["authSession", tokenSession?.accessToken],
+    queryFn: async () => (await api.get<WorkbenchSession>("/auth/session")).data,
+    enabled: !!tokenSession?.accessToken,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  })
 
   function logout() {
     clearSession()
@@ -66,11 +83,16 @@ export function useAuth() {
     window.location.href = "/auth/login"
   }
 
+  const isAdmin = sessionQuery.data?.groups.includes(WORKBENCH_ADMIN_GROUP) ?? false
+  const isViewer = sessionQuery.data?.groups.includes(WORKBENCH_VIEWER_GROUP) ?? false
+
   return {
     user: userQuery.data,
-    isLoading: userQuery.isLoading,
+    isLoading: userQuery.isLoading || sessionQuery.isLoading,
     isAuthenticated: !!tokenSession,
+    isAdmin,
+    isViewer,
+    hasWorkbenchAccess: isAdmin || isViewer,
     logout,
   }
 }
-

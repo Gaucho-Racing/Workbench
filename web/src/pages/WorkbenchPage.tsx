@@ -14,6 +14,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -58,7 +59,7 @@ const ConnectionDialog = lazy(() =>
 
 export default function WorkbenchPage() {
   const queryClient = useQueryClient()
-  const { user, logout } = useAuth()
+  const { user, isAdmin, logout } = useAuth()
   const targetsQuery = useTargets()
   const [selectedTargetID, setSelectedTargetID] = useState<string | null>(null)
   const [databaseSelection, setDatabaseSelection] = useState<{ targetID: string; databaseName: string } | null>(null)
@@ -67,6 +68,7 @@ export default function WorkbenchPage() {
   const [queryError, setQueryError] = useState("")
   const [running, setRunning] = useState(false)
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false)
+  const [connectionTarget, setConnectionTarget] = useState<DatabaseTarget | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [bottomTab, setBottomTab] = useState<"results" | "history">("results")
   const [filter, setFilter] = useState("")
@@ -193,6 +195,16 @@ export default function WorkbenchPage() {
     setQueryError("")
   }
 
+  function openNewConnection() {
+    setConnectionTarget(null)
+    setConnectionDialogOpen(true)
+  }
+
+  function openEditConnection(target: DatabaseTarget) {
+    setConnectionTarget(target)
+    setConnectionDialogOpen(true)
+  }
+
   return (
     <div className="grid h-full grid-rows-[46px_minmax(0,1fr)] bg-background">
       <header className="flex items-center gap-3 border-b bg-[#0f0e13] px-2.5 shadow-[inset_0_-1px_0_rgba(225,5,163,0.06)]">
@@ -222,6 +234,11 @@ export default function WorkbenchPage() {
           )}
         </div>
         <div className="ml-auto flex items-center gap-1.5">
+          {!isAdmin && (
+            <span className="mr-1 rounded border border-gr-purple/25 bg-gr-purple/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-wide text-purple-300">
+              READ ONLY
+            </span>
+          )}
           {running ? (
             <Button variant="destructive" size="sm" onClick={() => abortController.current?.abort()}>
               <CircleStop /> Stop
@@ -256,10 +273,12 @@ export default function WorkbenchPage() {
             <div className="flex h-10 items-center border-b px-2.5">
               <span className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Explorer</span>
               <div className="ml-auto flex gap-0.5">
-                <Button variant="ghost" size="icon-sm" onClick={() => setConnectionDialogOpen(true)}>
-                  <Plus />
-                  <span className="sr-only">New connection</span>
-                </Button>
+                {isAdmin && (
+                  <Button variant="ghost" size="icon-sm" onClick={openNewConnection}>
+                    <Plus />
+                    <span className="sr-only">New connection</span>
+                  </Button>
+                )}
                 <Button variant="ghost" size="icon-sm" onClick={() => void Promise.all([databasesQuery.refetch(), catalogQuery.refetch()])} disabled={!activeTargetID}>
                   <RefreshCw className={cn((databasesQuery.isFetching || catalogQuery.isFetching) && "animate-spin")} />
                   <span className="sr-only">Refresh catalog</span>
@@ -286,10 +305,14 @@ export default function WorkbenchPage() {
                 <div className="px-4 py-10 text-center">
                   <Database className="mx-auto mb-3 size-5 text-muted-foreground" />
                   <p className="text-xs font-medium">No connections yet</p>
-                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">Connect a PostgreSQL database to start exploring.</p>
-                  <Button className="mt-4" size="sm" onClick={() => setConnectionDialogOpen(true)}>
-                    <Plus /> Connect database
-                  </Button>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    {isAdmin ? "Connect a PostgreSQL database to start exploring." : "No database connections have been configured yet."}
+                  </p>
+                  {isAdmin && (
+                    <Button className="mt-4" size="sm" onClick={openNewConnection}>
+                      <Plus /> Connect database
+                    </Button>
+                  )}
                 </div>
               )}
               {targets.map((target) => (
@@ -306,6 +329,8 @@ export default function WorkbenchPage() {
                   onSelect={() => setSelectedTargetID(target.id)}
                   onSelectDatabase={(databaseName) => selectDatabase(target.id, databaseName)}
                   onOpenTable={openTable}
+                  canManage={isAdmin}
+                  onEdit={() => openEditConnection(target)}
                   onDelete={() => setTargetPendingDeletion(target)}
                 />
               ))}
@@ -392,9 +417,14 @@ export default function WorkbenchPage() {
       {connectionDialogOpen && (
         <Suspense fallback={null}>
           <ConnectionDialog
+            key={connectionTarget?.id ?? "new"}
             open
             onOpenChange={setConnectionDialogOpen}
-            onCreated={(target) => setSelectedTargetID(target.id)}
+            target={connectionTarget}
+            onSaved={(target) => {
+              setSelectedTargetID(target.id)
+              toast.success(connectionTarget ? `${target.name} updated` : `${target.name} connected`)
+            }}
           />
         </Suspense>
       )}
@@ -425,6 +455,8 @@ function TargetTree({
   onSelect,
   onSelectDatabase,
   onOpenTable,
+  canManage,
+  onEdit,
   onDelete,
 }: {
   target: DatabaseTarget
@@ -438,6 +470,8 @@ function TargetTree({
   onSelect: () => void
   onSelectDatabase: (databaseName: string) => void
   onOpenTable: (table: CatalogTable) => void
+  canManage: boolean
+  onEdit: () => void
   onDelete: () => void
 }) {
   const [expanded, setExpanded] = useState(true)
@@ -466,10 +500,18 @@ function TargetTree({
           <span className="truncate font-medium" title={target.name}>{target.name}</span>
           <EnvironmentBadge environment={target.environment} />
         </button>
-        <Button variant="ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100" onClick={onDelete}>
-          <Trash2 />
-          <span className="sr-only">Remove connection</span>
-        </Button>
+        {canManage && (
+          <>
+            <Button variant="ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={onEdit}>
+              <Pencil />
+              <span className="sr-only">Edit connection</span>
+            </Button>
+            <Button variant="ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={onDelete}>
+              <Trash2 />
+              <span className="sr-only">Remove connection</span>
+            </Button>
+          </>
+        )}
       </div>
       {selected && expanded && (
         <div className="pb-1">

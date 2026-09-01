@@ -31,6 +31,24 @@ func CreateTarget(c *gin.Context) {
 	c.JSON(http.StatusCreated, target)
 }
 
+func UpdateTarget(c *gin.Context) {
+	var input service.UpdateTargetInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	target, err := service.UpdateTarget(c.Request.Context(), c.Param("id"), input)
+	if errors.Is(err, service.ErrTargetNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, target)
+}
+
 func DeleteTarget(c *gin.Context) {
 	err := service.DeleteTarget(c.Request.Context(), c.Param("id"))
 	if errors.Is(err, service.ErrTargetNotFound) {

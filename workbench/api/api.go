@@ -59,7 +59,7 @@ func initializeRouter() *gin.Engine {
 	router.Use(gin.Logger(), gin.Recovery())
 	router.Use(cors.New(cors.Config{
 		AllowAllOrigins:  true,
-		AllowMethods:     []string{"GET", "POST", "DELETE", "HEAD", "OPTIONS"},
+		AllowMethods:     []string{"GET", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
 		AllowCredentials: false,
 		MaxAge:           12 * time.Hour,
@@ -78,14 +78,21 @@ func initializeRoutes(router *gin.Engine) {
 	authenticated.Use(requireAuthenticatedUser())
 	authenticated.GET("/auth/session", GetSession)
 	authenticated.GET("/users/@me", GetCurrentUser)
-	authenticated.GET("/targets", ListTargets)
-	authenticated.POST("/targets", CreateTarget)
-	authenticated.DELETE("/targets/:id", DeleteTarget)
-	authenticated.POST("/targets/:id/test", TestTarget)
-	authenticated.GET("/targets/:id/databases", ListTargetDatabases)
-	authenticated.GET("/targets/:id/catalog", GetCatalog)
-	authenticated.POST("/queries", ExecuteQuery)
-	authenticated.GET("/queries", ListQueryRuns)
+
+	member := authenticated.Group("")
+	member.Use(requireWorkbenchMember())
+	member.GET("/targets", ListTargets)
+	member.GET("/targets/:id/databases", ListTargetDatabases)
+	member.GET("/targets/:id/catalog", GetCatalog)
+	member.POST("/queries", ExecuteQuery)
+	member.GET("/queries", ListQueryRuns)
+
+	admin := authenticated.Group("")
+	admin.Use(requireWorkbenchAdmin())
+	admin.POST("/targets", CreateTarget)
+	admin.PATCH("/targets/:id", UpdateTarget)
+	admin.DELETE("/targets/:id", DeleteTarget)
+	admin.POST("/targets/:id/test", TestTarget)
 }
 
 func authChecker() gin.HandlerFunc {
@@ -114,6 +121,40 @@ func requireAuthenticatedUser() gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+const (
+	ViewerGroupName = "WorkbenchViewers"
+	AdminGroupName  = "WorkbenchAdmins"
+)
+
+func requireWorkbenchMember() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requestTokenHasGroup(c, ViewerGroupName) && !requestTokenHasGroup(c, AdminGroupName) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Workbench group membership is required"})
+			return
+		}
+		c.Next()
+	}
+}
+
+func requireWorkbenchAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requestTokenHasGroup(c, AdminGroupName) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Workbench administrator access is required"})
+			return
+		}
+		c.Next()
+	}
+}
+
+func requestTokenHasGroup(c *gin.Context, expected string) bool {
+	for _, group := range claimStringSlice(getRequestTokenClaims(c), "groups") {
+		if group == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func setAuthContext(c *gin.Context, token string, claims map[string]interface{}) {

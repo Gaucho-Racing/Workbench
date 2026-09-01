@@ -25,6 +25,17 @@ type CreateTargetInput struct {
 	SSLMode      string `json:"ssl_mode" binding:"required,oneof=disable allow prefer require verify-ca verify-full"`
 }
 
+type UpdateTargetInput struct {
+	Name         string `json:"name" binding:"required"`
+	Environment  string `json:"environment" binding:"required"`
+	Host         string `json:"host" binding:"required"`
+	Port         int    `json:"port" binding:"required,min=1,max=65535"`
+	DatabaseName string `json:"database_name" binding:"required"`
+	Username     string `json:"username" binding:"required"`
+	Password     string `json:"password"`
+	SSLMode      string `json:"ssl_mode" binding:"required,oneof=disable allow prefer require verify-ca verify-full"`
+}
+
 func ListTargets(ctx context.Context) ([]model.DatabaseTarget, error) {
 	rows, err := database.Pool.Query(ctx, `
 		SELECT id, name, environment, host, port, database_name, username, ssl_mode,
@@ -67,13 +78,11 @@ func GetTarget(ctx context.Context, id string) (model.DatabaseTarget, error) {
 }
 
 func CreateTarget(ctx context.Context, input CreateTargetInput, entityID string) (model.DatabaseTarget, error) {
-	input.Name = strings.TrimSpace(input.Name)
-	input.Environment = strings.TrimSpace(input.Environment)
-	input.Host = strings.TrimSpace(input.Host)
-	input.DatabaseName = strings.TrimSpace(input.DatabaseName)
-	input.Username = strings.TrimSpace(input.Username)
-	if input.Name == "" || input.Environment == "" || input.Host == "" || input.DatabaseName == "" || input.Username == "" {
-		return model.DatabaseTarget{}, fmt.Errorf("name, environment, host, database_name, and username cannot be blank")
+	name, environment, host, databaseName, username, err := normalizeTargetFields(
+		input.Name, input.Environment, input.Host, input.DatabaseName, input.Username,
+	)
+	if err != nil {
+		return model.DatabaseTarget{}, err
 	}
 	encryptedPassword, err := encryptSecret(input.Password)
 	if err != nil {
@@ -81,12 +90,12 @@ func CreateTarget(ctx context.Context, input CreateTargetInput, entityID string)
 	}
 	target := model.DatabaseTarget{
 		ID:                ulid.Make().Prefixed("db"),
-		Name:              input.Name,
-		Environment:       strings.ToUpper(input.Environment),
-		Host:              input.Host,
+		Name:              name,
+		Environment:       environment,
+		Host:              host,
 		Port:              input.Port,
-		DatabaseName:      input.DatabaseName,
-		Username:          input.Username,
+		DatabaseName:      databaseName,
+		Username:          username,
 		EncryptedPassword: encryptedPassword,
 		SSLMode:           input.SSLMode,
 		CreatedByEntityID: entityID,
@@ -108,6 +117,64 @@ func CreateTarget(ctx context.Context, input CreateTargetInput, entityID string)
 	}
 	target.EncryptedPassword = nil
 	return target, nil
+}
+
+func UpdateTarget(ctx context.Context, id string, input UpdateTargetInput) (model.DatabaseTarget, error) {
+	target, err := GetTarget(ctx, id)
+	if err != nil {
+		return model.DatabaseTarget{}, err
+	}
+	name, environment, host, databaseName, username, err := normalizeTargetFields(
+		input.Name, input.Environment, input.Host, input.DatabaseName, input.Username,
+	)
+	if err != nil {
+		return model.DatabaseTarget{}, err
+	}
+	target.Name = name
+	target.Environment = environment
+	target.Host = host
+	target.Port = input.Port
+	target.DatabaseName = databaseName
+	target.Username = username
+	target.SSLMode = input.SSLMode
+	if input.Password != "" {
+		target.EncryptedPassword, err = encryptSecret(input.Password)
+		if err != nil {
+			return model.DatabaseTarget{}, err
+		}
+	}
+	if err := TestTarget(ctx, target); err != nil {
+		return model.DatabaseTarget{}, fmt.Errorf("connect to target: %w", err)
+	}
+	err = database.Pool.QueryRow(ctx, `
+		UPDATE database_target
+		SET name = $2, environment = $3, host = $4, port = $5, database_name = $6,
+		    username = $7, encrypted_password = $8, ssl_mode = $9, updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL
+		RETURNING updated_at`, target.ID, target.Name, target.Environment, target.Host, target.Port,
+		target.DatabaseName, target.Username, target.EncryptedPassword, target.SSLMode,
+	).Scan(&target.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.DatabaseTarget{}, ErrTargetNotFound
+	}
+	if err != nil {
+		return model.DatabaseTarget{}, err
+	}
+	connectionManager.remove(target.ID)
+	target.EncryptedPassword = nil
+	return target, nil
+}
+
+func normalizeTargetFields(name string, environment string, host string, databaseName string, username string) (string, string, string, string, string, error) {
+	name = strings.TrimSpace(name)
+	environment = strings.ToUpper(strings.TrimSpace(environment))
+	host = strings.TrimSpace(host)
+	databaseName = strings.TrimSpace(databaseName)
+	username = strings.TrimSpace(username)
+	if name == "" || environment == "" || host == "" || databaseName == "" || username == "" {
+		return "", "", "", "", "", fmt.Errorf("name, environment, host, database_name, and username cannot be blank")
+	}
+	return name, environment, host, databaseName, username, nil
 }
 
 func DeleteTarget(ctx context.Context, id string) error {

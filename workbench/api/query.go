@@ -44,7 +44,13 @@ func ExecuteQuery(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	result, err := service.ExecuteQuery(c.Request.Context(), target, request.Statement, getRequestTokenEntityID(c))
+	result, err := service.ExecuteQuery(
+		c.Request.Context(),
+		target,
+		request.Statement,
+		getRequestTokenEntityID(c),
+		!requestTokenHasGroup(c, AdminGroupName),
+	)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "run_id": result.RunID})
 		return

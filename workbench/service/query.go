@@ -11,9 +11,10 @@ import (
 	"github.com/gaucho-racing/workbench/workbench/database"
 	"github.com/gaucho-racing/workbench/workbench/model"
 	"github.com/gaucho-racing/workbench/workbench/pkg/logger"
+	"github.com/jackc/pgx/v5"
 )
 
-func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement string, actorEntityID string) (model.QueryResult, error) {
+func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement string, actorEntityID string, readOnly bool) (model.QueryResult, error) {
 	run := model.QueryRun{
 		ID:            ulid.Make().Prefixed("qry"),
 		TargetID:      target.ID,
@@ -38,12 +39,22 @@ func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement st
 		return model.QueryResult{RunID: run.ID}, err
 	}
 	defer pool.Release()
-	rows, err := pool.Query(queryContext, statement)
+
+	var rows pgx.Rows
+	var transaction pgx.Tx
+	if readOnly {
+		transaction, err = pool.BeginTx(queryContext, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+		if err == nil {
+			defer transaction.Rollback(context.Background())
+			rows, err = transaction.Query(queryContext, statement)
+		}
+	} else {
+		rows, err = pool.Query(queryContext, statement)
+	}
 	if err != nil {
 		finishQueryRun(context.Background(), run.ID, "FAILED", "", 0, time.Since(startedAt), err)
 		return model.QueryResult{RunID: run.ID}, err
 	}
-	defer rows.Close()
 
 	fields := rows.FieldDescriptions()
 	columns := make([]model.QueryColumn, len(fields))
@@ -61,6 +72,7 @@ func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement st
 		}
 		values, err := rows.Values()
 		if err != nil {
+			rows.Close()
 			finishQueryRun(context.Background(), run.ID, "FAILED", "", int64(len(resultRows)), time.Since(startedAt), err)
 			return model.QueryResult{RunID: run.ID}, err
 		}
@@ -74,6 +86,7 @@ func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement st
 		resultRows = append(resultRows, formattedValues)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		finishQueryRun(context.Background(), run.ID, "FAILED", "", int64(len(resultRows)), time.Since(startedAt), err)
 		return model.QueryResult{RunID: run.ID}, err
 	}
@@ -82,6 +95,12 @@ func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement st
 	rowCount := int64(len(resultRows))
 	if len(fields) == 0 {
 		rowCount = commandTag.RowsAffected()
+	}
+	if transaction != nil {
+		if err := transaction.Commit(queryContext); err != nil {
+			finishQueryRun(context.Background(), run.ID, "FAILED", commandTag.String(), rowCount, time.Since(startedAt), err)
+			return model.QueryResult{RunID: run.ID}, err
+		}
 	}
 	duration := time.Since(startedAt)
 	finishQueryRun(context.Background(), run.ID, "SUCCEEDED", commandTag.String(), rowCount, duration, nil)

@@ -4,6 +4,7 @@ import type { languages } from "monaco-editor"
 import {
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   CircleStop,
   Clock3,
   Columns3,
@@ -25,6 +26,7 @@ import {
   X,
 } from "lucide-react"
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
 import { ConfirmationDialog } from "@/components/ConfirmationDialog"
@@ -71,11 +73,16 @@ export default function WorkbenchPage() {
   const [connectionTarget, setConnectionTarget] = useState<DatabaseTarget | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [bottomTab, setBottomTab] = useState<"results" | "history">("results")
+  const [bottomPaneCollapsed, setBottomPaneCollapsed] = useState(false)
+  const [bottomPaneRatio, setBottomPaneRatio] = useState(0.42)
+  const [bottomPaneResizing, setBottomPaneResizing] = useState(false)
   const [filter, setFilter] = useState("")
   const [workspaceView, setWorkspaceView] = useState<"query" | "diagram">("query")
   const [targetPendingDeletion, setTargetPendingDeletion] = useState<DatabaseTarget | null>(null)
   const [deletingTarget, setDeletingTarget] = useState(false)
   const abortController = useRef<AbortController | null>(null)
+  const workspaceRef = useRef<HTMLElement | null>(null)
+  const bottomPaneResizingRef = useRef(false)
 
   const targets = useMemo(() => targetsQuery.data ?? [], [targetsQuery.data])
   const activeTargetID = selectedTargetID && targets.some((target) => target.id === selectedTargetID)
@@ -109,9 +116,13 @@ export default function WorkbenchPage() {
         { signal: controller.signal },
       )
       setResult(response.data)
-      await queryClient.invalidateQueries({ queryKey: ["queryHistory"] })
+      setBottomPaneCollapsed(false)
+      void queryClient.invalidateQueries({ queryKey: ["queryHistory"] })
     } catch (error) {
-      if (!controller.signal.aborted) setQueryError(getErrorMessage(error))
+      if (!controller.signal.aborted) {
+        setQueryError(getErrorMessage(error))
+        setBottomPaneCollapsed(false)
+      }
     } finally {
       abortController.current = null
       setRunning(false)
@@ -205,6 +216,53 @@ export default function WorkbenchPage() {
     setConnectionDialogOpen(true)
   }
 
+  function selectBottomTab(tab: "results" | "history") {
+    setBottomTab(tab)
+    setBottomPaneCollapsed(false)
+  }
+
+  function setBottomPaneFromPointer(clientY: number) {
+    const bounds = workspaceRef.current?.getBoundingClientRect()
+    if (!bounds || bounds.height === 0) return
+    const ratio = (bounds.bottom - clientY) / bounds.height
+    setBottomPaneRatio(Math.min(0.68, Math.max(0.18, ratio)))
+  }
+
+  function startBottomPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId)
+    bottomPaneResizingRef.current = true
+    setBottomPaneResizing(true)
+    setBottomPaneCollapsed(false)
+    setBottomPaneFromPointer(event.clientY)
+  }
+
+  function moveBottomPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (bottomPaneResizingRef.current) setBottomPaneFromPointer(event.clientY)
+  }
+
+  function stopBottomPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    bottomPaneResizingRef.current = false
+    setBottomPaneResizing(false)
+  }
+
+  function resizeBottomPaneWithKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const adjustments: Record<string, number> = { ArrowUp: 0.04, ArrowDown: -0.04 }
+    const adjustment = adjustments[event.key]
+    if (!adjustment && event.key !== "Home" && event.key !== "End") return
+    event.preventDefault()
+    setBottomPaneCollapsed(false)
+    if (event.key === "Home") {
+      setBottomPaneRatio(0.18)
+    } else if (event.key === "End") {
+      setBottomPaneRatio(0.68)
+    } else {
+      setBottomPaneRatio((current) => Math.min(0.68, Math.max(0.18, current + adjustment)))
+    }
+  }
+
   return (
     <div className="grid h-full grid-rows-[46px_minmax(0,1fr)] bg-background">
       <header className="flex items-center gap-3 border-b bg-[#0f0e13] px-2.5 shadow-[inset_0_-1px_0_rgba(225,5,163,0.06)]">
@@ -267,9 +325,20 @@ export default function WorkbenchPage() {
         </div>
       </header>
 
-      <div className={cn("grid min-h-0", sidebarOpen ? "grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)]")}>
-        {sidebarOpen && (
-          <aside className="fixed top-[46px] bottom-0 left-0 z-20 flex min-h-0 w-[280px] flex-col overflow-hidden border-r bg-[#0f0e13] shadow-2xl shadow-black/40 lg:static lg:z-auto lg:shadow-none">
+      <div
+        className={cn(
+          "grid min-h-0 grid-cols-[minmax(0,1fr)] transition-[grid-template-columns] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none lg:grid-cols-[0px_minmax(0,1fr)]",
+          sidebarOpen && "lg:grid-cols-[280px_minmax(0,1fr)]",
+        )}
+      >
+        <aside
+          aria-hidden={!sidebarOpen}
+          inert={!sidebarOpen}
+          className={cn(
+            "fixed top-[46px] bottom-0 left-0 z-20 flex min-h-0 w-[280px] flex-col overflow-hidden border-r bg-[#0f0e13] shadow-2xl shadow-black/40 transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none lg:static lg:z-auto lg:w-full lg:shadow-none [&>*]:min-w-[280px]",
+            sidebarOpen ? "translate-x-0 opacity-100" : "pointer-events-none -translate-x-full opacity-0 lg:translate-x-0",
+          )}
+        >
             <div className="flex h-10 items-center border-b px-2.5">
               <span className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Explorer</span>
               <div className="ml-auto flex gap-0.5">
@@ -335,16 +404,30 @@ export default function WorkbenchPage() {
                 />
               ))}
             </div>
-          </aside>
-        )}
+        </aside>
 
-        <main className="relative grid min-h-0 grid-rows-[minmax(220px,58%)_minmax(180px,42%)] overflow-hidden">
-          {!sidebarOpen && (
-            <Button variant="ghost" size="icon-sm" className="absolute top-2 left-2 z-10" onClick={() => setSidebarOpen(true)}>
-              <PanelLeftOpen />
-              <span className="sr-only">Show explorer</span>
-            </Button>
+        <main
+          ref={workspaceRef}
+          className={cn(
+            "relative grid min-h-0 overflow-hidden motion-reduce:transition-none",
+            bottomPaneResizing ? "cursor-row-resize transition-none" : "transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
           )}
+          style={{ gridTemplateRows: `minmax(0, 1fr) ${bottomPaneCollapsed ? "36px" : `${bottomPaneRatio * 100}%`}` }}
+        >
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-hidden={sidebarOpen}
+            tabIndex={sidebarOpen ? -1 : 0}
+            className={cn(
+              "absolute top-2 left-2 z-10 transition-[transform,opacity] duration-200 ease-out motion-reduce:transition-none",
+              sidebarOpen ? "pointer-events-none -translate-x-2 opacity-0" : "translate-x-0 opacity-100 delay-150",
+            )}
+            onClick={() => setSidebarOpen(true)}
+          >
+            <PanelLeftOpen />
+            <span className="sr-only">Show explorer</span>
+          </Button>
           <section className="min-h-0 border-b bg-[#0d0c11] pt-1">
             <div className="flex h-8 items-center border-b px-3 text-xs">
               <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 font-mono text-[11px]", workspaceView === "query" ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("query")}>query.sql</button>
@@ -382,21 +465,54 @@ export default function WorkbenchPage() {
             </div>
           </section>
 
-          <section className="grid min-h-0 grid-rows-[36px_minmax(0,1fr)] bg-[#0f0e13]">
+          <section className="relative grid min-h-0 grid-rows-[36px_minmax(0,1fr)] bg-[#0f0e13]">
+            <div
+              role="separator"
+              aria-label="Resize results pane"
+              aria-orientation="horizontal"
+              aria-valuemin={0}
+              aria-valuemax={68}
+              aria-valuenow={bottomPaneCollapsed ? 0 : Math.round(bottomPaneRatio * 100)}
+              aria-valuetext={bottomPaneCollapsed ? "Collapsed" : `${Math.round(bottomPaneRatio * 100)} percent`}
+              tabIndex={0}
+              className="group absolute -top-1.5 right-0 left-0 z-20 h-3 touch-none cursor-row-resize outline-none after:absolute after:top-1/2 after:left-1/2 after:h-0.5 after:w-10 after:-translate-x-1/2 after:-translate-y-1/2 after:rounded-full after:bg-transparent after:transition-[width,background-color,box-shadow] after:duration-150 hover:after:w-14 hover:after:bg-gr-pink/55 hover:after:shadow-[0_0_12px_rgba(225,5,163,0.28)] focus-visible:after:w-14 focus-visible:after:bg-gr-pink/70 motion-reduce:after:transition-none"
+              onPointerDown={startBottomPaneResize}
+              onPointerMove={moveBottomPaneResize}
+              onPointerUp={stopBottomPaneResize}
+              onPointerCancel={stopBottomPaneResize}
+              onLostPointerCapture={stopBottomPaneResize}
+              onKeyDown={resizeBottomPaneWithKeyboard}
+            />
             <div className="flex items-center border-b px-2">
-              <BottomTab active={bottomTab === "results"} onClick={() => setBottomTab("results")}>
+              <BottomTab active={bottomTab === "results"} onClick={() => selectBottomTab("results")}>
                 <Columns3 /> Results {result && <span className="text-muted-foreground">{result.row_count}</span>}
               </BottomTab>
-              <BottomTab active={bottomTab === "history"} onClick={() => setBottomTab("history")}>
+              <BottomTab active={bottomTab === "history"} onClick={() => selectBottomTab("history")}>
                 <Clock3 /> History
               </BottomTab>
-              <div className="ml-auto pr-2 text-[11px] text-muted-foreground">
+              <div className="ml-auto min-w-0 truncate px-2 text-[11px] text-muted-foreground">
                 {result && bottomTab === "results" && `${result.database_name} · ${result.command_tag || "Query"} · ${result.duration_ms} ms`}
               </div>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="shrink-0"
+                onClick={() => setBottomPaneCollapsed((collapsed) => !collapsed)}
+              >
+                {bottomPaneCollapsed ? <ChevronUp /> : <ChevronDown />}
+                <span className="sr-only">{bottomPaneCollapsed ? "Expand results pane" : "Collapse results pane"}</span>
+              </Button>
             </div>
-            <div className="min-h-0 overflow-auto">
+            <div
+              className={cn(
+                "min-h-0 overflow-auto transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
+                bottomPaneCollapsed ? "pointer-events-none translate-y-1 opacity-0" : "translate-y-0 opacity-100 delay-75",
+              )}
+            >
               {bottomTab === "results" ? (
-                <ResultsPanel result={result} error={queryError} running={running} />
+                <div key={running ? "running" : result?.run_id ?? queryError} className="h-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-200">
+                  <ResultsPanel result={result} error={queryError} running={running} />
+                </div>
               ) : (
                 <HistoryPanel
                   runs={historyQuery.data ?? []}
@@ -405,7 +521,7 @@ export default function WorkbenchPage() {
                     setSelectedTargetID(run.target_id)
                     setDatabaseSelection({ targetID: run.target_id, databaseName: run.database_name })
                     setStatement(run.statement)
-                    setBottomTab("results")
+                    selectBottomTab("results")
                   }}
                 />
               )}
@@ -490,10 +606,10 @@ function TargetTree({
   return (
     <div>
       <div
-        className={cn("group flex h-8 items-center gap-1.5 border-l-2 px-2 text-xs", selected ? "sticky top-0 z-30 border-gr-pink bg-[#181122]/95 text-foreground shadow-sm backdrop-blur-md" : "border-transparent text-muted-foreground hover:bg-muted/50")}
+        className={cn("group flex h-8 items-center gap-1.5 border-l-2 px-2 text-xs transition-colors duration-150 motion-reduce:transition-none", selected ? "sticky top-0 z-30 border-gr-pink bg-[#181122]/95 text-foreground shadow-sm backdrop-blur-md" : "border-transparent text-muted-foreground hover:bg-muted/50")}
       >
         <button className="grid size-5 place-items-center" onClick={() => { setExpanded(!expanded); if (!selected) onSelect() }}>
-          {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          <ChevronRight className={cn("size-3.5 transition-transform duration-200 ease-out motion-reduce:transition-none", expanded && "rotate-90")} />
         </button>
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onSelect}>
           <Server className={cn("size-3.5", selected && "text-gr-purple")} />
@@ -521,10 +637,10 @@ function TargetTree({
             return (
               <div key={database.name}>
                 <button
-                  className={cn("flex h-8 w-full items-center gap-1.5 pr-2 pl-6 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground", active && "sticky top-8 z-20 bg-[#121017]/95 text-foreground shadow-sm backdrop-blur-md")}
+                  className={cn("flex h-8 w-full items-center gap-1.5 pr-2 pl-6 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/40 hover:text-foreground motion-reduce:transition-none", active && "sticky top-8 z-20 bg-[#121017]/95 text-foreground shadow-sm backdrop-blur-md")}
                   onClick={() => onSelectDatabase(database.name)}
                 >
-                  {active ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+                  <ChevronRight className={cn("size-3.5 transition-transform duration-200 ease-out motion-reduce:transition-none", active && "rotate-90")} />
                   <Database className={cn("size-3.5", active && "text-gr-pink")} />
                   <span className="truncate font-mono text-[11px]" title={database.name}>{database.name}</span>
                 </button>
@@ -551,13 +667,13 @@ function SchemaTree({ schema, tables, onOpenTable }: { schema: string; tables: C
   const [expanded, setExpanded] = useState(true)
   return (
     <div>
-      <button className="sticky top-16 z-10 flex h-7 w-full items-center gap-1.5 bg-[#0f0e13]/95 px-1 text-xs text-muted-foreground shadow-sm backdrop-blur-md hover:text-foreground" onClick={() => setExpanded(!expanded)}>
-        {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+      <button className="sticky top-16 z-10 flex h-7 w-full items-center gap-1.5 bg-[#0f0e13]/95 px-1 text-xs text-muted-foreground shadow-sm backdrop-blur-md transition-colors duration-150 hover:text-foreground motion-reduce:transition-none" onClick={() => setExpanded(!expanded)}>
+        <ChevronRight className={cn("size-3.5 transition-transform duration-200 ease-out motion-reduce:transition-none", expanded && "rotate-90")} />
         <span className="font-mono text-[11px]">{schema}</span>
       </button>
       {expanded &&
         tables.map((table) => (
-          <button key={table.name} className="flex h-7 w-full items-center gap-2 pl-6 pr-2 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground" onDoubleClick={() => onOpenTable(table)} onClick={() => onOpenTable(table)}>
+          <button key={table.name} className="flex h-7 w-full items-center gap-2 pr-2 pl-6 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/40 hover:text-foreground motion-reduce:transition-none" onDoubleClick={() => onOpenTable(table)} onClick={() => onOpenTable(table)}>
             <Table2 className="size-3.5" />
             <span className="truncate">{table.name}</span>
           </button>
@@ -588,7 +704,7 @@ function ResultsPanel({ result, error, running }: { result: QueryResult | null; 
       </thead>
       <tbody>
         {result.rows.map((row, rowIndex) => (
-          <tr key={rowIndex} className="hover:bg-white/[0.025]">
+          <tr key={rowIndex} className="transition-colors duration-100 hover:bg-white/[0.025] motion-reduce:transition-none">
             <td className="border-r border-b px-2 py-1 text-right text-muted-foreground">{rowIndex + 1}</td>
             {row.map((value, columnIndex) => (
               <td key={columnIndex} className="max-w-96 truncate border-r border-b px-3 py-1.5" title={value === null ? "NULL" : String(value)}>
@@ -608,7 +724,7 @@ function HistoryPanel({ runs, loading, onSelect }: { runs: QueryRun[]; loading: 
   return (
     <div className="divide-y divide-border">
       {runs.map((run) => (
-        <button key={run.id} className="grid w-full grid-cols-[120px_1fr_auto] items-center gap-3 px-3 py-2 text-left text-xs hover:bg-muted/35" onClick={() => onSelect(run)}>
+        <button key={run.id} className="grid w-full grid-cols-[120px_1fr_auto] items-center gap-3 px-3 py-2 text-left text-xs transition-colors duration-150 hover:bg-muted/35 motion-reduce:transition-none" onClick={() => onSelect(run)}>
           <div>
             <div className="font-medium">{run.target_name} <span className="font-mono font-normal text-muted-foreground">/ {run.database_name}</span></div>
             <div className="mt-0.5 text-[10px] text-muted-foreground">{new Date(run.created_at).toLocaleString()}</div>
@@ -626,7 +742,7 @@ function HistoryPanel({ runs, loading, onSelect }: { runs: QueryRun[]; loading: 
 
 function BottomTab({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) {
   return (
-    <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 text-xs", active ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground hover:text-foreground", "[&_svg]:size-3.5")} onClick={onClick}>
+    <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 text-xs transition-[color,border-color] duration-200 motion-reduce:transition-none", active ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground hover:text-foreground", "[&_svg]:size-3.5")} onClick={onClick}>
       {children}
     </button>
   )

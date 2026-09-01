@@ -26,6 +26,10 @@ if [ "$branch" != "main" ]; then
     echo "Error: must be on main branch (currently on $branch)"
     exit 1
 fi
+if [ -n "$(git status --porcelain)" ]; then
+    echo "Error: working tree must be clean before releasing"
+    exit 1
+fi
 
 git fetch origin main --tags --quiet
 local_commit="$(git rev-parse HEAD)"
@@ -72,4 +76,3 @@ git push origin main
 gh release create "$version" --target main --title "$version" --generate-notes
 
 echo "Released $version. Image and deployment workflows are running."
-

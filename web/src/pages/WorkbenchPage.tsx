@@ -1,4 +1,4 @@
-import Editor, { type OnMount } from "@monaco-editor/react"
+import Editor, { type Monaco, type OnMount } from "@monaco-editor/react"
 import { useQueryClient } from "@tanstack/react-query"
 import type { editor, languages } from "monaco-editor"
 import {
@@ -32,7 +32,7 @@ import {
   X,
 } from "lucide-react"
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react"
+import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react"
 import { toast } from "sonner"
 
 import { ConfirmationDialog } from "@/components/ConfirmationDialog"
@@ -78,6 +78,13 @@ type RunAllPolicy = "abort" | "continue"
 type SessionMode = "read" | "write"
 type BatchRunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped"
 
+type SQLEditorTab = {
+  id: string
+  name: string
+  path: string
+  value: string
+}
+
 type BatchQueryRun = {
   statementNumber: number
   statement: string
@@ -90,6 +97,16 @@ const initialStatement = `select
   current_database() as database,
   current_user as user,
   now() as connected_at;`
+
+const initialEditorTab: SQLEditorTab = {
+  id: "sql-tab-1",
+  name: "query.sql",
+  path: "file:///workbench/sql-tab-1.sql",
+  value: initialStatement,
+}
+
+const maxDroppedSQLFiles = 20
+const maxDroppedSQLFileBytes = 10 * 1024 * 1024
 
 const SchemaDiagram = lazy(() =>
   import("@/components/SchemaDiagram").then((module) => ({ default: module.SchemaDiagram })),
@@ -116,7 +133,9 @@ export default function WorkbenchPage() {
   const targetsQuery = useTargets()
   const [selectedTargetID, setSelectedTargetID] = useState<string | null>(null)
   const [databaseSelection, setDatabaseSelection] = useState<{ targetID: string; databaseName: string } | null>(null)
-  const [statement, setStatement] = useState(initialStatement)
+  const [editorTabs, setEditorTabs] = useState<SQLEditorTab[]>([initialEditorTab])
+  const [activeEditorTabID, setActiveEditorTabID] = useState(initialEditorTab.id)
+  const [sqlFileDragging, setSQLFileDragging] = useState(false)
   const [result, setResult] = useState<QueryResult | null>(null)
   const [queryError, setQueryError] = useState("")
   const [batchRuns, setBatchRuns] = useState<BatchQueryRun[]>([])
@@ -146,6 +165,9 @@ export default function WorkbenchPage() {
   const [deletingTarget, setDeletingTarget] = useState(false)
   const abortController = useRef<AbortController | null>(null)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
+  const monacoRef = useRef<Monaco | null>(null)
+  const nextEditorTabNumber = useRef(2)
+  const sqlFileDragDepth = useRef(0)
   const statementDecoration = useRef<editor.IEditorDecorationsCollection | null>(null)
   const statementRailElement = useRef<HTMLDivElement | null>(null)
   const statementIndicatorDisposables = useRef<{ dispose: () => void }[]>([])
@@ -175,6 +197,8 @@ export default function WorkbenchPage() {
   const selectedBatchRun = batchRuns[selectedBatchRunIndex] ?? null
   const finishedBatchRunCount = batchRuns.filter((run) => run.status !== "queued" && run.status !== "running").length
   const writeMode = isAdmin && sessionMode === "write"
+  const activeEditorTab = editorTabs.find((tab) => tab.id === activeEditorTabID) ?? editorTabs[0] ?? initialEditorTab
+  const statement = activeEditorTab.value
 
   const signalReadOnlyViolation = useCallback(() => {
     setSessionModeError("Write blocked. Switch this session to Write mode to run it.")
@@ -346,6 +370,7 @@ export default function WorkbenchPage() {
 
   const mountEditor: OnMount = (editor, monaco) => {
     editorRef.current = editor
+    monacoRef.current = monaco
     editor.addAction({
       id: "workbench.execute-query",
       label: "Execute query",
@@ -434,10 +459,117 @@ export default function WorkbenchPage() {
     statementIndicatorDisposables.current = [
       editor.onDidChangeCursorSelection(resetStatementIndicator),
       editor.onDidChangeModelContent(resetStatementIndicator),
+      editor.onDidChangeModel(resetStatementIndicator),
       editor.onDidScrollChange(updateStatementIndicator),
       editor.onDidLayoutChange(updateStatementIndicator),
     ]
     updateStatementIndicator()
+  }
+
+  function buildSQLTab(value = "", fileName?: string): SQLEditorTab {
+    const tabNumber = nextEditorTabNumber.current
+    nextEditorTabNumber.current += 1
+    const id = `sql-tab-${tabNumber}`
+    return {
+      id,
+      name: fileName || `query-${tabNumber}.sql`,
+      path: `file:///workbench/${id}.sql`,
+      value,
+    }
+  }
+
+  function openSQLTab(value = "", fileName?: string) {
+    const tab = buildSQLTab(value, fileName)
+    setEditorTabs((current) => [...current, tab])
+    setActiveEditorTabID(tab.id)
+    setWorkspaceView("query")
+    setBatchRuns([])
+    setQueryError("")
+    return tab
+  }
+
+  function updateActiveSQL(value: string) {
+    setEditorTabs((current) => current.map((tab) => tab.id === activeEditorTabID ? { ...tab, value } : tab))
+  }
+
+  function closeSQLTab(tabID: string) {
+    if (running) return
+    const closingIndex = editorTabs.findIndex((tab) => tab.id === tabID)
+    if (closingIndex < 0) return
+    const closingTab = editorTabs[closingIndex]
+    let remaining = editorTabs.filter((tab) => tab.id !== tabID)
+    if (remaining.length === 0) remaining = [buildSQLTab()]
+    if (activeEditorTabID === tabID) {
+      const nextActive = remaining[Math.min(closingIndex, remaining.length - 1)]
+      setActiveEditorTabID(nextActive.id)
+    }
+    setEditorTabs(remaining)
+    window.setTimeout(() => {
+      const monaco = monacoRef.current
+      if (!monaco) return
+      monaco.editor.getModel(monaco.Uri.parse(closingTab.path))?.dispose()
+    }, 0)
+  }
+
+  async function openDroppedSQLFiles(fileList: FileList) {
+    const droppedFiles = Array.from(fileList)
+    const limitedFiles = droppedFiles.slice(0, maxDroppedSQLFiles)
+    const validFiles = limitedFiles.filter((file) => (
+      file.name.toLowerCase().endsWith(".sql") && file.size <= maxDroppedSQLFileBytes
+    ))
+    const skippedCount = droppedFiles.length - validFiles.length
+    if (skippedCount > 0) {
+      toast.warning(`Skipped ${skippedCount} file${skippedCount === 1 ? "" : "s"}; use .sql files up to 10 MB each`)
+    }
+    if (validFiles.length === 0) return
+
+    const loadedFiles = await Promise.all(validFiles.map(async (file) => {
+      try {
+        return { file, value: await file.text(), error: "" }
+      } catch (error) {
+        return { file, value: "", error: getErrorMessage(error) }
+      }
+    }))
+    const readableFiles = loadedFiles.filter((loaded) => !loaded.error)
+    const readErrorCount = loadedFiles.length - readableFiles.length
+    if (readErrorCount > 0) toast.error(`Could not read ${readErrorCount} SQL file${readErrorCount === 1 ? "" : "s"}`)
+    if (readableFiles.length === 0) return
+
+    const tabs = readableFiles.map(({ file, value }) => buildSQLTab(value, file.name))
+    setEditorTabs((current) => [...current, ...tabs])
+    setActiveEditorTabID(tabs[tabs.length - 1].id)
+    setWorkspaceView("query")
+    setBatchRuns([])
+    setQueryError("")
+    toast.success(`${tabs.length} SQL file${tabs.length === 1 ? "" : "s"} opened`)
+  }
+
+  function startSQLFileDrag(event: ReactDragEvent<HTMLDivElement>) {
+    if (!Array.from(event.dataTransfer.types).includes("Files")) return
+    event.preventDefault()
+    sqlFileDragDepth.current += 1
+    setSQLFileDragging(true)
+  }
+
+  function continueSQLFileDrag(event: ReactDragEvent<HTMLDivElement>) {
+    if (!Array.from(event.dataTransfer.types).includes("Files")) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "copy"
+  }
+
+  function endSQLFileDrag(event: ReactDragEvent<HTMLDivElement>) {
+    if (sqlFileDragDepth.current === 0) return
+    event.preventDefault()
+    sqlFileDragDepth.current = Math.max(0, sqlFileDragDepth.current - 1)
+    if (sqlFileDragDepth.current === 0) setSQLFileDragging(false)
+  }
+
+  function dropSQLFiles(event: ReactDragEvent<HTMLDivElement>) {
+    if (!Array.from(event.dataTransfer.types).includes("Files")) return
+    event.preventDefault()
+    sqlFileDragDepth.current = 0
+    setSQLFileDragging(false)
+    void openDroppedSQLFiles(event.dataTransfer.files)
   }
 
   async function deleteTarget(target: DatabaseTarget) {
@@ -455,8 +587,7 @@ export default function WorkbenchPage() {
   }
 
   function openTable(table: CatalogTable) {
-    setStatement(selectStatementForTable(table.schema, table.name, 100))
-    setWorkspaceView("query")
+    openSQLTab(selectStatementForTable(table.schema, table.name, 100), `${table.name}.sql`)
   }
 
   function openTableExport(table: CatalogTable) {
@@ -756,12 +887,12 @@ export default function WorkbenchPage() {
           style={{ gridTemplateRows: `minmax(0, 1fr) ${bottomPaneCollapsed ? "36px" : `${bottomPaneRatio * 100}%`}` }}
         >
           <section className="min-h-0 border-b bg-[#0d0c11] pt-1">
-            <div className="flex h-8 items-center border-b px-3 text-xs">
+            <div className="flex h-8 min-w-0 items-center border-b text-xs">
               <div
                 aria-hidden={sidebarOpen}
                 className={cn(
                   "grid h-full shrink-0 place-items-center overflow-hidden transition-[width,opacity,margin] duration-200 ease-out motion-reduce:transition-none",
-                  sidebarOpen ? "pointer-events-none w-0 opacity-0" : "mr-1 w-7 opacity-100 delay-150",
+                  sidebarOpen ? "pointer-events-none w-0 opacity-0" : "ml-1 w-7 opacity-100 delay-150",
                 )}
               >
                 <Button variant="ghost" size="icon-sm" tabIndex={sidebarOpen ? -1 : 0} onClick={() => setSidebarOpen(true)}>
@@ -769,31 +900,118 @@ export default function WorkbenchPage() {
                   <span className="sr-only">Show explorer</span>
                 </Button>
               </div>
-              <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 font-mono text-[11px]", workspaceView === "query" ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("query")}>query.sql</button>
-              <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 text-[11px]", workspaceView === "diagram" ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("diagram")}><GitFork className="size-3" /> Diagram</button>
-              <span className="ml-2 text-muted-foreground">{activeDatabaseName ?? "disconnected"}</span>
+              <div role="tablist" aria-label="Workbench views" className="flex h-full min-w-0 flex-1">
+                <button
+                  role="tab"
+                  aria-selected={workspaceView === "diagram"}
+                  className={cn(
+                    "flex h-full shrink-0 items-center gap-1.5 border-b-2 px-3 text-[11px] transition-[color,border-color,background-color] duration-150 motion-reduce:transition-none",
+                    workspaceView === "diagram"
+                      ? "border-gr-pink bg-gr-pink/[0.04] text-foreground"
+                      : "border-transparent text-muted-foreground hover:bg-white/[0.025] hover:text-foreground",
+                  )}
+                  onClick={() => setWorkspaceView("diagram")}
+                >
+                  <GitFork className="size-3" /> Diagram
+                </button>
+                <div className="h-4 w-px shrink-0 self-center bg-border" />
+                <div className="flex h-full min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {editorTabs.map((tab) => {
+                    const active = workspaceView === "query" && tab.id === activeEditorTabID
+                    return (
+                      <div
+                        key={tab.id}
+                        className={cn(
+                          "group flex h-full min-w-32 max-w-52 shrink-0 items-center border-b-2 transition-[color,border-color,background-color] duration-150 motion-reduce:transition-none",
+                          active
+                            ? "border-gr-pink bg-gr-pink/[0.04] text-foreground"
+                            : "border-transparent text-muted-foreground hover:bg-white/[0.025] hover:text-foreground",
+                        )}
+                        onAuxClick={(event) => {
+                          if (event.button !== 1) return
+                          event.preventDefault()
+                          closeSQLTab(tab.id)
+                        }}
+                      >
+                        <button
+                          role="tab"
+                          aria-selected={active}
+                          className="min-w-0 flex-1 truncate self-stretch pl-3 text-left font-mono text-[11px] outline-none focus-visible:text-foreground"
+                          title={tab.name}
+                          onClick={() => {
+                            setActiveEditorTabID(tab.id)
+                            setWorkspaceView("query")
+                          }}
+                        >
+                          {tab.name}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={running}
+                          className={cn(
+                            "mr-1 grid size-5 shrink-0 place-items-center rounded text-muted-foreground opacity-0 outline-none transition-[color,background-color,opacity,transform] hover:bg-white/[0.06] hover:text-foreground active:scale-90 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-gr-pink/45 disabled:pointer-events-none motion-reduce:transform-none motion-reduce:transition-none group-hover:opacity-100",
+                            active && "opacity-60",
+                          )}
+                          onClick={() => closeSQLTab(tab.id)}
+                        >
+                          <X className="size-3" />
+                          <span className="sr-only">Close {tab.name}</span>
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+              <Button variant="ghost" size="icon-sm" className="mx-1 shrink-0" onClick={() => openSQLTab()}>
+                <Plus />
+                <span className="sr-only">New SQL tab</span>
+              </Button>
             </div>
             <div className="h-[calc(100%-2rem)]">
               {workspaceView === "query" ? (
-                <Editor
-                  language="pgsql"
-                  theme="vs-dark"
-                  value={statement}
-                  onChange={(value) => setStatement(value ?? "")}
-                  onMount={mountEditor}
-                  options={{
-                    automaticLayout: true,
-                    fontFamily: "Geist Mono Variable, SFMono-Regular, monospace",
-                    fontSize: 13,
-                    lineHeight: 21,
-                    minimap: { enabled: false },
-                    padding: { top: 14 },
-                    renderLineHighlight: "gutter",
-                    scrollBeyondLastLine: false,
-                    smoothScrolling: true,
-                    suggest: { showWords: false },
-                  }}
-                />
+                <div
+                  className="relative h-full"
+                  onDragEnter={startSQLFileDrag}
+                  onDragOver={continueSQLFileDrag}
+                  onDragLeave={endSQLFileDrag}
+                  onDrop={dropSQLFiles}
+                >
+                  <Editor
+                    language="pgsql"
+                    theme="vs-dark"
+                    path={activeEditorTab.path}
+                    value={statement}
+                    saveViewState
+                    keepCurrentModel
+                    onChange={(value) => updateActiveSQL(value ?? "")}
+                    onMount={mountEditor}
+                    options={{
+                      automaticLayout: true,
+                      fontFamily: "Geist Mono Variable, SFMono-Regular, monospace",
+                      fontSize: 13,
+                      lineHeight: 21,
+                      minimap: { enabled: false },
+                      padding: { top: 14 },
+                      renderLineHighlight: "gutter",
+                      scrollBeyondLastLine: false,
+                      smoothScrolling: true,
+                      suggest: { showWords: false },
+                    }}
+                  />
+                  <div
+                    aria-hidden={!sqlFileDragging}
+                    className={cn(
+                      "pointer-events-none absolute inset-3 z-30 grid place-items-center rounded-xl border-2 border-dashed bg-[#100d16]/88 opacity-0 shadow-2xl shadow-gr-purple/15 backdrop-blur-sm transition-[opacity,transform,border-color] duration-150 motion-reduce:transition-none",
+                      sqlFileDragging && "scale-[0.995] border-gr-pink/70 opacity-100",
+                    )}
+                  >
+                    <div className="text-center">
+                      <FileCode2 className="mx-auto size-8 text-gr-pink drop-shadow-[0_0_14px_rgba(225,5,163,0.25)]" />
+                      <p className="mt-3 text-sm font-medium">Drop SQL files to open tabs</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">Each file opens in its own editor buffer</p>
+                    </div>
+                  </div>
+                </div>
               ) : catalogQuery.data ? (
                 <Suspense fallback={<CenteredMessage>Loading schema diagram…</CenteredMessage>}>
                   <SchemaDiagram catalog={catalogQuery.data} />
@@ -895,8 +1113,7 @@ export default function WorkbenchPage() {
                   onSelect={(run) => {
                     setSelectedTargetID(run.target_id)
                     setDatabaseSelection({ targetID: run.target_id, databaseName: run.database_name })
-                    setStatement(run.statement)
-                    setBatchRuns([])
+                    openSQLTab(run.statement, "history.sql")
                     selectBottomTab("results")
                   }}
                 />
@@ -1283,7 +1500,7 @@ function SchemaTree({
         tables.map((table) => (
           <ContextMenu key={table.name}>
             <ContextMenuTrigger asChild>
-              <button className="flex h-7 w-full items-center gap-2 pr-2 pl-6 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/40 hover:text-foreground data-[state=open]:bg-muted/55 data-[state=open]:text-foreground motion-reduce:transition-none" onDoubleClick={() => onOpenTable(table)} onClick={() => onOpenTable(table)}>
+              <button className="flex h-7 w-full items-center gap-2 pr-2 pl-6 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/40 hover:text-foreground data-[state=open]:bg-muted/55 data-[state=open]:text-foreground motion-reduce:transition-none" onClick={() => onOpenTable(table)}>
                 <Table2 className="size-3.5" />
                 <span className="truncate">{table.name}</span>
               </button>

@@ -87,10 +87,11 @@ func initializeRoutes(router *gin.Engine) {
 	member.GET("/targets/:id/catalog", GetCatalog)
 	member.POST("/queries", ExecuteQuery)
 	member.GET("/queries", ListQueryRuns)
-	member.POST("/exports", ExportQueryCSV)
 
 	admin := authenticated.Group("")
 	admin.Use(requireWorkbenchAdmin())
+	admin.POST("/exports/preview", PreviewExport)
+	admin.POST("/exports", ExportQuery)
 	admin.POST("/targets", CreateTarget)
 	admin.PATCH("/targets/:id", UpdateTarget)
 	admin.DELETE("/targets/:id", DeleteTarget)

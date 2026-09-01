@@ -15,7 +15,7 @@ import (
 
 const maxImportRequestBytes = 51 << 20
 
-func ExportQueryCSV(c *gin.Context) {
+func PreviewExport(c *gin.Context) {
 	var request struct {
 		TargetID     string `json:"target_id" binding:"required"`
 		DatabaseName string `json:"database_name"`
@@ -48,16 +48,74 @@ func ExportQueryCSV(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	preview, err := service.PreviewExportQuery(c.Request.Context(), target, request.Statement)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, preview)
+}
 
-	fileName := fmt.Sprintf("%s-%s-%s.csv", safeFileName(target.Name), safeFileName(target.DatabaseName), time.Now().Format("20060102-150405"))
-	c.Header("Content-Type", "text/csv; charset=utf-8")
+func ExportQuery(c *gin.Context) {
+	var request struct {
+		TargetID     string `json:"target_id" binding:"required"`
+		DatabaseName string `json:"database_name"`
+		Statement    string `json:"statement" binding:"required"`
+		Format       string `json:"format" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	request.Statement = strings.TrimSpace(request.Statement)
+	if request.Statement == "" || len(request.Statement) > maxStatementBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "statement must contain between 1 and 1048576 bytes"})
+		return
+	}
+	exportFormat, err := service.ParseExportFormat(request.Format)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	target, err := service.GetTarget(c.Request.Context(), request.TargetID)
+	if errors.Is(err, service.ErrTargetNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	target, err = service.SelectDatabase(c.Request.Context(), target, request.DatabaseName)
+	if errors.Is(err, service.ErrDatabaseUnavailable) {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	timestamp := time.Now().Format("20060102-150405")
+	fileName := fmt.Sprintf("%s-%s-%s.%s", safeFileName(target.Name), safeFileName(target.DatabaseName), timestamp, exportFormat.Extension())
+	c.Header("Content-Type", exportFormat.ContentType())
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
-	transferID, err := service.ExportQueryCSV(c.Request.Context(), target, request.Statement, getRequestTokenEntityID(c), c.Writer)
+	transferID, err := service.ExportQuery(
+		c.Request.Context(),
+		target,
+		request.Statement,
+		getRequestTokenEntityID(c),
+		service.ExportOptions{
+			Format:       exportFormat,
+			SQLTableName: safeSQLIdentifier(target.DatabaseName) + "_export_" + strings.ReplaceAll(timestamp, "-", "_"),
+		},
+		c.Writer,
+	)
 	if err == nil {
 		return
 	}
 	if c.Writer.Written() {
-		logger.SugarLogger.Errorf("CSV export %s failed after streaming began: %v", transferID, err)
+		logger.SugarLogger.Errorf("%s export %s failed after streaming began: %v", exportFormat, transferID, err)
 		return
 	}
 	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "transfer_id": transferID})
@@ -122,4 +180,18 @@ func safeFileName(value string) string {
 		return '-'
 	}, value)
 	return strings.Trim(value, "-")
+}
+
+func safeSQLIdentifier(value string) string {
+	value = strings.Map(func(character rune) rune {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '_' {
+			return character
+		}
+		return '_'
+	}, value)
+	value = strings.Trim(value, "_")
+	if value == "" {
+		return "workbench"
+	}
+	return value
 }

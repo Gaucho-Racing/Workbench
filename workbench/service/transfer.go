@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -14,17 +16,145 @@ import (
 	"github.com/gaucho-racing/workbench/workbench/model"
 	"github.com/gaucho-racing/workbench/workbench/pkg/logger"
 	"github.com/jackc/pgx/v5"
+	"github.com/parquet-go/parquet-go"
 )
 
-const importTimeout = 5 * time.Minute
+const (
+	importTimeout         = 5 * time.Minute
+	exportPreviewMaxRows  = 20
+	exportPreviewMaxBytes = 512 << 10
+)
 
 type ImportResult struct {
 	TransferID string `json:"transfer_id"`
 	RowCount   int64  `json:"row_count"`
 }
 
-func ExportQueryCSV(ctx context.Context, target model.DatabaseTarget, statement string, actorEntityID string, destination io.Writer) (string, error) {
-	transferID, err := startDataTransferRun(ctx, target, actorEntityID, "EXPORT", "", "", "", statement)
+type ExportPreview struct {
+	Columns   []model.QueryColumn `json:"columns"`
+	Rows      [][]interface{}     `json:"rows"`
+	RowCount  int                 `json:"row_count"`
+	Truncated bool                `json:"truncated"`
+}
+
+type ExportFormat string
+
+const (
+	ExportFormatCSV     ExportFormat = "csv"
+	ExportFormatJSON    ExportFormat = "json"
+	ExportFormatParquet ExportFormat = "parquet"
+	ExportFormatSQL     ExportFormat = "sql"
+)
+
+type ExportOptions struct {
+	Format       ExportFormat
+	SQLTableName string
+}
+
+func ParseExportFormat(value string) (ExportFormat, error) {
+	format := ExportFormat(strings.ToLower(strings.TrimSpace(value)))
+	switch format {
+	case ExportFormatCSV, ExportFormatJSON, ExportFormatParquet, ExportFormatSQL:
+		return format, nil
+	default:
+		return "", fmt.Errorf("format must be one of: csv, json, parquet, sql")
+	}
+}
+
+func (format ExportFormat) Extension() string {
+	return string(format)
+}
+
+func (format ExportFormat) ContentType() string {
+	switch format {
+	case ExportFormatCSV:
+		return "text/csv; charset=utf-8"
+	case ExportFormatJSON:
+		return "application/json; charset=utf-8"
+	case ExportFormatParquet:
+		return "application/vnd.apache.parquet"
+	case ExportFormatSQL:
+		return "application/sql; charset=utf-8"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func PreviewExportQuery(ctx context.Context, target model.DatabaseTarget, statement string) (ExportPreview, error) {
+	previewContext, cancel := context.WithTimeout(ctx, config.QueryTimeoutDuration)
+	defer cancel()
+
+	pool, err := TargetPool(previewContext, target)
+	if err != nil {
+		return ExportPreview{}, err
+	}
+	defer pool.Release()
+
+	transaction, err := pool.BeginTx(previewContext, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return ExportPreview{}, err
+	}
+	defer transaction.Rollback(context.Background())
+
+	rows, err := transaction.Query(previewContext, statement)
+	if err != nil {
+		return ExportPreview{}, err
+	}
+	defer rows.Close()
+
+	fields := rows.FieldDescriptions()
+	if len(fields) == 0 {
+		return ExportPreview{}, fmt.Errorf("export query must return columns")
+	}
+	rawColumnNames := make([]string, len(fields))
+	for index, field := range fields {
+		rawColumnNames[index] = field.Name
+	}
+	columnNames := uniqueExportColumnNames(rawColumnNames)
+	columns := make([]model.QueryColumn, len(fields))
+	for index, field := range fields {
+		columns[index] = model.QueryColumn{Name: columnNames[index], DataTypeOID: field.DataTypeOID}
+	}
+
+	previewRows := make([][]interface{}, 0, exportPreviewMaxRows)
+	previewBytes := 0
+	truncated := false
+	for rows.Next() {
+		if len(previewRows) >= exportPreviewMaxRows {
+			truncated = true
+			break
+		}
+		values, valuesErr := rows.Values()
+		if valuesErr != nil {
+			return ExportPreview{}, valuesErr
+		}
+		normalizedValues := normalizeExportValues(values)
+		rowBytes := estimateRowBytes(normalizedValues)
+		if previewBytes+rowBytes > exportPreviewMaxBytes {
+			truncated = true
+			break
+		}
+		previewBytes += rowBytes
+		previewRows = append(previewRows, normalizedValues)
+	}
+	if err := rows.Err(); err != nil {
+		return ExportPreview{}, err
+	}
+	rows.Close()
+	if err := transaction.Commit(previewContext); err != nil {
+		return ExportPreview{}, err
+	}
+	return ExportPreview{Columns: columns, Rows: previewRows, RowCount: len(previewRows), Truncated: truncated}, nil
+}
+
+func ExportQuery(ctx context.Context, target model.DatabaseTarget, statement string, actorEntityID string, options ExportOptions, destination io.Writer) (string, error) {
+	if _, err := ParseExportFormat(string(options.Format)); err != nil {
+		return "", err
+	}
+	if options.Format == ExportFormatSQL && strings.TrimSpace(options.SQLTableName) == "" {
+		return "", fmt.Errorf("SQL table name is required")
+	}
+	transferID, err := startDataTransferRun(ctx, target, actorEntityID, "EXPORT", "", "", "", statement, string(options.Format))
 	if err != nil {
 		return "", err
 	}
@@ -60,12 +190,13 @@ func ExportQueryCSV(ctx context.Context, target model.DatabaseTarget, statement 
 		return transferID, err
 	}
 
-	writer := csv.NewWriter(destination)
-	header := make([]string, len(fields))
+	columnNames := make([]string, len(fields))
 	for index, field := range fields {
-		header[index] = field.Name
+		columnNames[index] = field.Name
 	}
-	if err := writer.Write(header); err != nil {
+	columnNames = uniqueExportColumnNames(columnNames)
+	encoder, err := newExportEncoder(options, columnNames, destination)
+	if err != nil {
 		finishDataTransferRun(transferID, 0, startedAt, err)
 		return transferID, err
 	}
@@ -77,31 +208,19 @@ func ExportQueryCSV(ctx context.Context, target model.DatabaseTarget, statement 
 			err = valuesErr
 			break
 		}
-		record := make([]string, len(values))
-		for index, value := range formatValues(values) {
-			if value != nil {
-				record[index] = fmt.Sprint(value)
-			}
-		}
-		if writeErr := writer.Write(record); writeErr != nil {
+		if writeErr := encoder.WriteRow(normalizeExportValues(values)); writeErr != nil {
 			err = writeErr
 			break
 		}
 		rowCount += 1
-		if rowCount%256 == 0 {
-			writer.Flush()
-			if flushErr := writer.Error(); flushErr != nil {
-				err = flushErr
-				break
-			}
-		}
 	}
 	if err == nil {
 		err = rows.Err()
 	}
-	writer.Flush()
 	if err == nil {
-		err = writer.Error()
+		err = encoder.Close()
+	} else {
+		_ = encoder.Close()
 	}
 	if err == nil {
 		err = transaction.Commit(exportContext)
@@ -110,8 +229,234 @@ func ExportQueryCSV(ctx context.Context, target model.DatabaseTarget, statement 
 	return transferID, err
 }
 
+type exportEncoder interface {
+	WriteRow([]interface{}) error
+	Close() error
+}
+
+func newExportEncoder(options ExportOptions, columnNames []string, destination io.Writer) (exportEncoder, error) {
+	switch options.Format {
+	case ExportFormatCSV:
+		writer := csv.NewWriter(destination)
+		if err := writer.Write(columnNames); err != nil {
+			return nil, err
+		}
+		return &csvExportEncoder{writer: writer}, nil
+	case ExportFormatJSON:
+		if _, err := io.WriteString(destination, "[\n"); err != nil {
+			return nil, err
+		}
+		return &jsonExportEncoder{destination: destination, columnNames: columnNames}, nil
+	case ExportFormatParquet:
+		return newParquetExportEncoder(columnNames, destination)
+	case ExportFormatSQL:
+		return newSQLExportEncoder(options.SQLTableName, columnNames, destination)
+	default:
+		return nil, fmt.Errorf("unsupported export format %q", options.Format)
+	}
+}
+
+type csvExportEncoder struct {
+	writer   *csv.Writer
+	rowCount int
+}
+
+func (encoder *csvExportEncoder) WriteRow(values []interface{}) error {
+	record := make([]string, len(values))
+	for index, value := range values {
+		if value != nil {
+			record[index] = fmt.Sprint(value)
+		}
+	}
+	if err := encoder.writer.Write(record); err != nil {
+		return err
+	}
+	encoder.rowCount += 1
+	if encoder.rowCount%256 == 0 {
+		encoder.writer.Flush()
+		return encoder.writer.Error()
+	}
+	return nil
+}
+
+func (encoder *csvExportEncoder) Close() error {
+	encoder.writer.Flush()
+	return encoder.writer.Error()
+}
+
+type jsonExportEncoder struct {
+	destination io.Writer
+	columnNames []string
+	wroteRow    bool
+}
+
+func (encoder *jsonExportEncoder) WriteRow(values []interface{}) error {
+	record := make(map[string]interface{}, len(encoder.columnNames))
+	for index, columnName := range encoder.columnNames {
+		record[columnName] = values[index]
+	}
+	contents, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	prefix := "  "
+	if encoder.wroteRow {
+		prefix = ",\n  "
+	}
+	if _, err := io.WriteString(encoder.destination, prefix); err != nil {
+		return err
+	}
+	if _, err := encoder.destination.Write(contents); err != nil {
+		return err
+	}
+	encoder.wroteRow = true
+	return nil
+}
+
+func (encoder *jsonExportEncoder) Close() error {
+	_, err := io.WriteString(encoder.destination, "\n]\n")
+	return err
+}
+
+type parquetExportEncoder struct {
+	writer        *parquet.Writer
+	columnIndexes []int
+	rows          []parquet.Row
+}
+
+func newParquetExportEncoder(columnNames []string, destination io.Writer) (exportEncoder, error) {
+	group := make(parquet.Group, len(columnNames))
+	inputIndexes := make(map[string]int, len(columnNames))
+	for index, columnName := range columnNames {
+		group[columnName] = parquet.Optional(parquet.String())
+		inputIndexes[columnName] = index
+	}
+	schema := parquet.NewSchema("workbench_export", group)
+	columnIndexes := make([]int, len(columnNames))
+	for index, path := range schema.Columns() {
+		columnIndexes[index] = inputIndexes[path[len(path)-1]]
+	}
+	return &parquetExportEncoder{
+		writer:        parquet.NewWriter(destination, schema),
+		columnIndexes: columnIndexes,
+		rows:          make([]parquet.Row, 0, 256),
+	}, nil
+}
+
+func (encoder *parquetExportEncoder) WriteRow(values []interface{}) error {
+	row := make(parquet.Row, len(encoder.columnIndexes))
+	for columnIndex, inputIndex := range encoder.columnIndexes {
+		if values[inputIndex] == nil {
+			row[columnIndex] = parquet.NullValue().Level(0, 0, columnIndex)
+		} else {
+			row[columnIndex] = parquet.ValueOf(fmt.Sprint(values[inputIndex])).Level(0, 1, columnIndex)
+		}
+	}
+	encoder.rows = append(encoder.rows, row)
+	if len(encoder.rows) < cap(encoder.rows) {
+		return nil
+	}
+	return encoder.flush()
+}
+
+func (encoder *parquetExportEncoder) Close() error {
+	if err := encoder.flush(); err != nil {
+		return err
+	}
+	return encoder.writer.Close()
+}
+
+func (encoder *parquetExportEncoder) flush() error {
+	if len(encoder.rows) == 0 {
+		return nil
+	}
+	written, err := encoder.writer.WriteRows(encoder.rows)
+	if err == nil && written != len(encoder.rows) {
+		err = io.ErrShortWrite
+	}
+	encoder.rows = encoder.rows[:0]
+	return err
+}
+
+type sqlExportEncoder struct {
+	destination io.Writer
+	tableName   string
+	columns     string
+}
+
+func newSQLExportEncoder(tableName string, columnNames []string, destination io.Writer) (exportEncoder, error) {
+	quotedColumns := make([]string, len(columnNames))
+	definitions := make([]string, len(columnNames))
+	for index, columnName := range columnNames {
+		quotedColumns[index] = pgx.Identifier{columnName}.Sanitize()
+		definitions[index] = quotedColumns[index] + " text"
+	}
+	quotedTable := pgx.Identifier{tableName}.Sanitize()
+	if _, err := fmt.Fprintf(destination, "CREATE TABLE %s (\n  %s\n);\n\n", quotedTable, strings.Join(definitions, ",\n  ")); err != nil {
+		return nil, err
+	}
+	return &sqlExportEncoder{destination: destination, tableName: quotedTable, columns: strings.Join(quotedColumns, ", ")}, nil
+}
+
+func (encoder *sqlExportEncoder) WriteRow(values []interface{}) error {
+	literals := make([]string, len(values))
+	for index, value := range values {
+		if value == nil {
+			literals[index] = "NULL"
+		} else {
+			literals[index] = "'" + strings.ReplaceAll(fmt.Sprint(value), "'", "''") + "'"
+		}
+	}
+	_, err := fmt.Fprintf(encoder.destination, "INSERT INTO %s (%s) VALUES (%s);\n", encoder.tableName, encoder.columns, strings.Join(literals, ", "))
+	return err
+}
+
+func (encoder *sqlExportEncoder) Close() error {
+	return nil
+}
+
+func uniqueExportColumnNames(columnNames []string) []string {
+	uniqueNames := make([]string, len(columnNames))
+	used := make(map[string]struct{}, len(columnNames))
+	for index, columnName := range columnNames {
+		base := strings.TrimSpace(columnName)
+		if base == "" {
+			base = fmt.Sprintf("column_%d", index+1)
+		}
+		candidate := base
+		for suffix := 2; ; suffix += 1 {
+			if _, exists := used[candidate]; !exists {
+				break
+			}
+			candidate = fmt.Sprintf("%s_%d", base, suffix)
+		}
+		used[candidate] = struct{}{}
+		uniqueNames[index] = candidate
+	}
+	return uniqueNames
+}
+
+func normalizeExportValues(values []interface{}) []interface{} {
+	normalized := make([]interface{}, len(values))
+	for index, value := range values {
+		switch typed := value.(type) {
+		case nil:
+			normalized[index] = nil
+		case []byte:
+			normalized[index] = "\\x" + hex.EncodeToString(typed)
+		case time.Time:
+			normalized[index] = typed.Format(time.RFC3339Nano)
+		case string, bool, int8, int16, int32, int64, int, uint8, uint16, uint32, uint64, uint, float32, float64:
+			normalized[index] = typed
+		default:
+			normalized[index] = fmt.Sprint(typed)
+		}
+	}
+	return normalized
+}
+
 func ImportCSV(ctx context.Context, target model.DatabaseTarget, schemaName string, tableName string, fileName string, source io.ReadSeeker, actorEntityID string) (ImportResult, error) {
-	transferID, err := startDataTransferRun(ctx, target, actorEntityID, "IMPORT", schemaName, tableName, fileName, "")
+	transferID, err := startDataTransferRun(ctx, target, actorEntityID, "IMPORT", schemaName, tableName, fileName, "", "csv")
 	if err != nil {
 		return ImportResult{}, err
 	}
@@ -229,14 +574,14 @@ func tableColumns(ctx context.Context, transaction pgx.Tx, schemaName string, ta
 	return columns, nil
 }
 
-func startDataTransferRun(ctx context.Context, target model.DatabaseTarget, actorEntityID string, direction string, schemaName string, tableName string, fileName string, statement string) (string, error) {
+func startDataTransferRun(ctx context.Context, target model.DatabaseTarget, actorEntityID string, direction string, schemaName string, tableName string, fileName string, statement string, format string) (string, error) {
 	id := ulid.Make().Prefixed("xfer")
 	_, err := database.Pool.Exec(ctx, `
 		INSERT INTO data_transfer_run (
 			id, target_id, database_name, actor_entity_id, direction, schema_name,
-			table_name, file_name, statement, status
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'RUNNING')`,
-		id, target.ID, target.DatabaseName, actorEntityID, direction, schemaName, tableName, fileName, statement,
+			table_name, file_name, statement, format, status
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'RUNNING')`,
+		id, target.ID, target.DatabaseName, actorEntityID, direction, schemaName, tableName, fileName, statement, format,
 	)
 	return id, err
 }

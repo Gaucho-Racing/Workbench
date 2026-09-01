@@ -32,8 +32,10 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerE
 import { toast } from "sonner"
 
 import { ConfirmationDialog } from "@/components/ConfirmationDialog"
+import type { ExportFormat } from "@/components/ExportDialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { api, getErrorMessage } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import {
@@ -66,6 +68,9 @@ const ConnectionDialog = lazy(() =>
 const DataImportDialog = lazy(() =>
   import("@/components/DataImportDialog").then((module) => ({ default: module.DataImportDialog })),
 )
+const ExportDialog = lazy(() =>
+  import("@/components/ExportDialog").then((module) => ({ default: module.ExportDialog })),
+)
 
 export default function WorkbenchPage() {
   const queryClient = useQueryClient()
@@ -80,6 +85,9 @@ export default function WorkbenchPage() {
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false)
   const [connectionTarget, setConnectionTarget] = useState<DatabaseTarget | null>(null)
   const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [exportDialogOpen, setExportDialogOpen] = useState(false)
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("csv")
+  const [exportStatement, setExportStatement] = useState("")
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [bottomTab, setBottomTab] = useState<"results" | "history">("results")
   const [bottomPaneCollapsed, setBottomPaneCollapsed] = useState(false)
@@ -89,7 +97,6 @@ export default function WorkbenchPage() {
   const [workspaceView, setWorkspaceView] = useState<"query" | "diagram">("query")
   const [targetPendingDeletion, setTargetPendingDeletion] = useState<DatabaseTarget | null>(null)
   const [deletingTarget, setDeletingTarget] = useState(false)
-  const [exporting, setExporting] = useState(false)
   const abortController = useRef<AbortController | null>(null)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const statementDecoration = useRef<editor.IEditorDecorationsCollection | null>(null)
@@ -309,33 +316,12 @@ export default function WorkbenchPage() {
     setConnectionDialogOpen(true)
   }
 
-  async function exportCurrentStatement() {
-    if (!activeTargetID || !activeDatabaseName || exporting) return
+  function openExportPreview() {
+    if (!isAdmin || !activeTargetID || !activeDatabaseName) return
     const executableStatement = statementForEditor(editorRef.current, statement)
     if (!executableStatement) return
-    setExporting(true)
-    try {
-      const response = await api.post<Blob>(
-        "/exports",
-        { target_id: activeTargetID, database_name: activeDatabaseName, statement: executableStatement },
-        { responseType: "blob" },
-      )
-      const disposition = String(response.headers["content-disposition"] ?? "")
-      const fileName = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? `${activeDatabaseName}-export.csv`
-      const url = URL.createObjectURL(response.data)
-      const link = document.createElement("a")
-      link.href = url
-      link.download = fileName
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-      toast.success("CSV export ready")
-    } catch (error) {
-      toast.error(await exportErrorMessage(error))
-    } finally {
-      setExporting(false)
-    }
+    setExportStatement(executableStatement)
+    setExportDialogOpen(true)
   }
 
   function selectBottomTab(tab: "results" | "history") {
@@ -619,17 +605,30 @@ export default function WorkbenchPage() {
               <div className="ml-auto min-w-0 truncate px-2 text-[11px] text-muted-foreground">
                 {result && bottomTab === "results" && `${result.database_name} · ${result.command_tag || "Query"} · ${result.duration_ms} ms`}
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="shrink-0"
-                disabled={!selectedTarget || !activeDatabaseName || workspaceView !== "query" || exporting}
-                onClick={() => void exportCurrentStatement()}
-              >
-                <Download />
-                <span className="hidden sm:inline">{exporting ? "Exporting…" : "CSV"}</span>
-                <span className="sr-only sm:hidden">Export current query as CSV</span>
-              </Button>
+              <div className={cn("flex h-7 shrink-0 overflow-hidden rounded-md border", !isAdmin && "opacity-45")}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="rounded-none border-r"
+                  disabled={!isAdmin || !selectedTarget || !activeDatabaseName || workspaceView !== "query" || !statement.trim()}
+                  onClick={openExportPreview}
+                >
+                  <Download />
+                  <span className="hidden sm:inline">Export</span>
+                  <span className="sr-only sm:hidden">Preview export</span>
+                </Button>
+                <Select value={exportFormat} onValueChange={(value) => setExportFormat(value as ExportFormat)} disabled={!isAdmin || workspaceView !== "query"}>
+                  <SelectTrigger className="h-7 w-[76px] rounded-none border-0 bg-transparent px-2 font-mono text-[9px] uppercase focus:ring-0" aria-label="Export format">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="csv">CSV</SelectItem>
+                    <SelectItem value="json">JSON</SelectItem>
+                    <SelectItem value="parquet">Parquet</SelectItem>
+                    <SelectItem value="sql">SQL</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -691,6 +690,19 @@ export default function WorkbenchPage() {
             databaseName={activeDatabaseName}
             tables={catalogQuery.data?.tables ?? []}
             onImported={(rowCount, table) => toast.success(`${rowCount.toLocaleString()} rows imported into ${table.schema}.${table.name}`)}
+          />
+        </Suspense>
+      )}
+      {exportDialogOpen && selectedTarget && activeDatabaseName && exportStatement && (
+        <Suspense fallback={null}>
+          <ExportDialog
+            open
+            onOpenChange={setExportDialogOpen}
+            target={selectedTarget}
+            databaseName={activeDatabaseName}
+            statement={exportStatement}
+            format={exportFormat}
+            onFormatChange={setExportFormat}
           />
         </Suspense>
       )}
@@ -916,17 +928,4 @@ function CenteredMessage({ children }: { children: React.ReactNode }) {
 
 function statementRangeKey(range: SQLStatementRange | null) {
   return range ? `${range.start}:${range.end}` : ""
-}
-
-async function exportErrorMessage(error: unknown) {
-  const data = (error as { response?: { data?: unknown } })?.response?.data
-  if (data instanceof Blob) {
-    try {
-      const parsed = JSON.parse(await data.text()) as { error?: string }
-      if (parsed.error) return parsed.error
-    } catch {
-      return "CSV export failed"
-    }
-  }
-  return getErrorMessage(error)
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/gaucho-racing/workbench/workbench/pkg/logger"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/parquet-go/parquet-go"
 )
 
@@ -270,7 +271,12 @@ func ExportQuery(ctx context.Context, target model.DatabaseTarget, statement str
 			err = valuesErr
 			break
 		}
-		if writeErr := encoder.WriteRow(normalizeExportValues(values)); writeErr != nil {
+		exportValues, valuesErr := valuesForExport(options.Format, rows, fields, values)
+		if valuesErr != nil {
+			err = valuesErr
+			break
+		}
+		if writeErr := encoder.WriteRow(exportValues); writeErr != nil {
 			err = writeErr
 			break
 		}
@@ -610,6 +616,8 @@ func normalizeExportValues(values []interface{}) []interface{} {
 			normalized[index] = "\\x" + hex.EncodeToString(typed)
 		case time.Time:
 			normalized[index] = typed.Format(time.RFC3339Nano)
+		case map[string]interface{}, []interface{}:
+			normalized[index] = typed
 		case string, bool, int8, int16, int32, int64, int, uint8, uint16, uint32, uint64, uint, float32, float64:
 			normalized[index] = typed
 		default:
@@ -617,6 +625,39 @@ func normalizeExportValues(values []interface{}) []interface{} {
 		}
 	}
 	return normalized
+}
+
+func valuesForExport(format ExportFormat, rows pgx.Rows, fields []pgconn.FieldDescription, values []interface{}) ([]interface{}, error) {
+	if format == ExportFormatJSON {
+		return normalizeExportValues(values), nil
+	}
+	if len(fields) != len(values) {
+		return nil, fmt.Errorf("export row contains %d values for %d columns", len(values), len(fields))
+	}
+
+	rawValues := rows.RawValues()
+	if len(rawValues) != len(values) {
+		return nil, fmt.Errorf("export row contains %d raw values for %d columns", len(rawValues), len(fields))
+	}
+	typeMap := rows.Conn().TypeMap()
+	encodedValues := make([]interface{}, len(values))
+	for index, value := range values {
+		if value == nil {
+			continue
+		}
+		if fields[index].Format == pgtype.TextFormatCode {
+			encodedValues[index] = string(rawValues[index])
+			continue
+		}
+		encoded, err := typeMap.Encode(fields[index].DataTypeOID, pgtype.TextFormatCode, value, nil)
+		if err != nil {
+			return nil, fmt.Errorf("encode export column %q as PostgreSQL text: %w", fields[index].Name, err)
+		}
+		if encoded != nil {
+			encodedValues[index] = string(encoded)
+		}
+	}
+	return encodedValues, nil
 }
 
 func PreviewCSVImport(ctx context.Context, target model.DatabaseTarget, schemaName string, tableName string, source io.Reader) (ImportPreview, error) {

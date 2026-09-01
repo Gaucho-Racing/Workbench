@@ -1,6 +1,6 @@
 import Editor, { type OnMount } from "@monaco-editor/react"
 import { useQueryClient } from "@tanstack/react-query"
-import type { languages } from "monaco-editor"
+import type { editor, languages } from "monaco-editor"
 import {
   ChevronDown,
   ChevronRight,
@@ -46,6 +46,7 @@ import {
   useTargets,
 } from "@/lib/database"
 import { cn } from "@/lib/utils"
+import { statementForEditor } from "@/lib/sql"
 
 const initialStatement = `select
   current_database() as database,
@@ -81,6 +82,7 @@ export default function WorkbenchPage() {
   const [targetPendingDeletion, setTargetPendingDeletion] = useState<DatabaseTarget | null>(null)
   const [deletingTarget, setDeletingTarget] = useState(false)
   const abortController = useRef<AbortController | null>(null)
+  const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const workspaceRef = useRef<HTMLElement | null>(null)
   const bottomPaneResizingRef = useRef(false)
 
@@ -104,6 +106,8 @@ export default function WorkbenchPage() {
 
   const execute = useCallback(async () => {
     if (!activeTargetID || !statement.trim() || running) return
+    const executableStatement = statementForEditor(editorRef.current, statement)
+    if (!executableStatement) return
     const controller = new AbortController()
     abortController.current = controller
     setRunning(true)
@@ -112,7 +116,7 @@ export default function WorkbenchPage() {
     try {
       const response = await api.post<QueryResult>(
         "/queries",
-        { target_id: activeTargetID, database_name: activeDatabaseName, statement },
+        { target_id: activeTargetID, database_name: activeDatabaseName, statement: executableStatement },
         { signal: controller.signal },
       )
       setResult(response.data)
@@ -141,9 +145,14 @@ export default function WorkbenchPage() {
     catalogRef.current = catalogQuery.data?.tables ?? []
   }, [catalogQuery.data])
 
+  useEffect(() => {
+    if (workspaceView !== "query") editorRef.current = null
+  }, [workspaceView])
+
   useEffect(() => () => completionDisposable.current?.dispose(), [])
 
   const mountEditor: OnMount = (editor, monaco) => {
+    editorRef.current = editor
     editor.addAction({
       id: "workbench.execute-query",
       label: "Execute query",

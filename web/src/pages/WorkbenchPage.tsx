@@ -575,10 +575,14 @@ export default function WorkbenchPage() {
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           <span className={cn(
-            "mr-1 rounded border px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-wide",
-            writeMode ? "border-destructive/25 bg-destructive/10 text-destructive" : "border-gr-purple/25 bg-gr-purple/10 text-purple-300",
+            "mr-1 overflow-hidden rounded border px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-wide transition-[color,background-color,border-color,box-shadow] duration-500 ease-out",
+            writeMode
+              ? "border-gr-pink/30 bg-gr-pink/10 text-pink-200 shadow-[0_0_12px_rgba(225,5,163,0.08)]"
+              : "border-gr-purple/30 bg-gr-purple/10 text-purple-200 shadow-[0_0_12px_rgba(132,18,252,0.08)]",
           )}>
-            {writeMode ? "WRITE MODE" : "READ ONLY"}
+            <span key={writeMode ? "write" : "read"} className="workbench-mode-status-enter inline-block">
+              {writeMode ? "WRITE MODE" : "READ ONLY"}
+            </span>
           </span>
           {running ? (
             <Button variant="destructive" size="sm" onClick={() => abortController.current?.abort()}>
@@ -980,25 +984,55 @@ function SessionModeControl({
       <div
         key={attentionKey}
         className={cn(
-          "rounded-lg border bg-black/20 p-2 transition-[border-color,background-color,box-shadow] duration-200",
+          "rounded-lg border bg-black/20 p-2 transition-[border-color,background-color,box-shadow] duration-500 ease-out",
+          mode === "write"
+            ? "border-gr-pink/20 shadow-[0_0_20px_rgba(225,5,163,0.045)]"
+            : "border-gr-purple/20 shadow-[0_0_20px_rgba(132,18,252,0.04)]",
           error && "workbench-mode-shake border-destructive/40 bg-destructive/[0.06] shadow-[0_0_18px_rgba(255,91,113,0.08)]",
         )}
       >
         <div className="mb-2 flex items-center gap-2 px-0.5">
-          <div className={cn("size-1.5 rounded-full", mode === "write" ? "bg-destructive shadow-[0_0_8px_rgba(255,91,113,0.55)]" : "bg-gr-purple shadow-[0_0_8px_rgba(132,18,252,0.45)]")} />
+          <div
+            key={mode}
+            className={cn(
+              "workbench-mode-dot-enter size-1.5 rounded-full transition-[background-color,box-shadow] duration-500",
+              mode === "write"
+                ? "bg-gr-pink shadow-[0_0_9px_rgba(225,5,163,0.55)]"
+                : "bg-gr-purple shadow-[0_0_9px_rgba(132,18,252,0.5)]",
+            )}
+          />
           <span className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Query session</span>
-          <span className={cn("ml-auto font-mono text-[9px] font-semibold", mode === "write" ? "text-destructive" : "text-purple-300")}>
+          <span
+            key={`label-${mode}`}
+            className={cn(
+              "workbench-mode-status-enter ml-auto font-mono text-[9px] font-semibold",
+              mode === "write" ? "text-pink-200" : "text-purple-200",
+            )}
+          >
             {mode === "write" ? "WRITE" : "READ ONLY"}
           </span>
         </div>
-        <div className="grid grid-cols-2 rounded-md border bg-black/25 p-0.5">
+        <div
+          role="group"
+          aria-label="Query session mode"
+          className="relative isolate grid grid-cols-2 overflow-hidden rounded-md border bg-black/25 p-0.5"
+        >
+          <span
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none absolute top-0.5 bottom-0.5 left-0.5 z-0 w-[calc(50%_-_0.125rem)] rounded-[5px] transition-[transform,background-color,box-shadow] duration-500 [transition-timing-function:cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+              mode === "write"
+                ? "translate-x-full bg-gr-pink/15 shadow-[inset_0_0_0_1px_rgba(225,5,163,0.18),0_0_14px_rgba(225,5,163,0.09)]"
+                : "translate-x-0 bg-gr-purple/15 shadow-[inset_0_0_0_1px_rgba(132,18,252,0.18),0_0_14px_rgba(132,18,252,0.08)]",
+            )}
+          />
           <button
             type="button"
             aria-pressed={mode === "read"}
             disabled={disabled}
             className={cn(
-              "flex h-7 items-center justify-center gap-1.5 rounded text-[10px] font-medium text-muted-foreground transition-[color,background-color,box-shadow,transform] duration-150 outline-none hover:text-foreground active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transform-none motion-reduce:transition-none",
-              mode === "read" && "bg-gr-purple/15 text-purple-200 shadow-sm",
+              "relative z-10 flex h-7 items-center justify-center gap-1.5 rounded text-[10px] font-medium text-muted-foreground outline-none transition-[color,transform] duration-300 hover:text-foreground active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-gr-purple/45 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transform-none motion-reduce:transition-none [&_svg]:transition-transform [&_svg]:duration-500",
+              mode === "read" && "text-purple-100 [&_svg]:scale-110",
             )}
             onClick={() => onModeChange("read")}
           >
@@ -1010,8 +1044,8 @@ function SessionModeControl({
             aria-disabled={!isAdmin || disabled}
             disabled={!isAdmin || disabled}
             className={cn(
-              "flex h-7 items-center justify-center gap-1.5 rounded text-[10px] font-medium text-muted-foreground transition-[color,background-color,box-shadow,transform] duration-150 outline-none hover:text-foreground active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-35 motion-reduce:transform-none motion-reduce:transition-none",
-              mode === "write" && "bg-destructive/15 text-red-200 shadow-sm",
+              "relative z-10 flex h-7 items-center justify-center gap-1.5 rounded text-[10px] font-medium text-muted-foreground outline-none transition-[color,transform] duration-300 hover:text-foreground active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-gr-pink/45 disabled:pointer-events-none disabled:opacity-35 motion-reduce:transform-none motion-reduce:transition-none [&_svg]:transition-transform [&_svg]:duration-500",
+              mode === "write" && "text-pink-100 [&_svg]:scale-110",
             )}
             onClick={() => onModeChange("write")}
           >

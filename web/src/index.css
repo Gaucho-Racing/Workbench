@@ -130,8 +130,37 @@
   animation: workbench-mode-shake 360ms ease-out;
 }
 
+@keyframes workbench-mode-status-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes workbench-mode-dot-enter {
+  0% { opacity: 0.35; transform: scale(0.45); }
+  55% { opacity: 1; transform: scale(1.35); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.workbench-mode-status-enter {
+  animation: workbench-mode-status-enter 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.workbench-mode-dot-enter {
+  animation: workbench-mode-dot-enter 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .workbench-mode-shake {
+  .workbench-mode-shake,
+  .workbench-mode-status-enter,
+  .workbench-mode-dot-enter {
     animation: none;
   }
 }

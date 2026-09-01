@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,7 +13,13 @@ import (
 	"github.com/gaucho-racing/workbench/workbench/model"
 	"github.com/gaucho-racing/workbench/workbench/pkg/logger"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+func IsReadOnlyViolation(err error) bool {
+	var postgresError *pgconn.PgError
+	return errors.As(err, &postgresError) && postgresError.Code == "25006"
+}
 
 func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement string, actorEntityID string, readOnly bool) (model.QueryResult, error) {
 	run := model.QueryRun{

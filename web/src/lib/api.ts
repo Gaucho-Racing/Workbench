@@ -74,3 +74,6 @@ export function getErrorMessage(error: unknown) {
   )
 }
 
+export function getErrorCode(error: unknown) {
+  return (error as { response?: { data?: { code?: string } } })?.response?.data?.code ?? ""
+}

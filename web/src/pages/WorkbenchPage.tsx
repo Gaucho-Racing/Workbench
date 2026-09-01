@@ -14,11 +14,13 @@ import {
   Download,
   FileCode2,
   GitFork,
+  LockKeyhole,
   LogOut,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
+  PenLine,
   Play,
   Plus,
   RefreshCw,
@@ -47,7 +49,7 @@ import {
 } from "@/components/ui/context-menu"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { api, getErrorMessage } from "@/lib/api"
+import { api, getErrorCode, getErrorMessage } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import {
   type CatalogTable,
@@ -73,6 +75,7 @@ import {
 
 type StatementIndicatorStatus = "idle" | "success" | "error"
 type RunAllPolicy = "abort" | "continue"
+type SessionMode = "read" | "write"
 type BatchRunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped"
 
 type BatchQueryRun = {
@@ -116,6 +119,9 @@ export default function WorkbenchPage() {
   const [batchRuns, setBatchRuns] = useState<BatchQueryRun[]>([])
   const [selectedBatchRunIndex, setSelectedBatchRunIndex] = useState(0)
   const [runAllPolicy, setRunAllPolicy] = useState<RunAllPolicy>("abort")
+  const [sessionMode, setSessionMode] = useState<SessionMode>("read")
+  const [sessionModeError, setSessionModeError] = useState("")
+  const [sessionModeAttention, setSessionModeAttention] = useState(0)
   const [running, setRunning] = useState(false)
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false)
   const [connectionTarget, setConnectionTarget] = useState<DatabaseTarget | null>(null)
@@ -164,6 +170,12 @@ export default function WorkbenchPage() {
   const historyQuery = useQueryHistory()
   const selectedBatchRun = batchRuns[selectedBatchRunIndex] ?? null
   const finishedBatchRunCount = batchRuns.filter((run) => run.status !== "queued" && run.status !== "running").length
+  const writeMode = isAdmin && sessionMode === "write"
+
+  const signalReadOnlyViolation = useCallback(() => {
+    setSessionModeError("Write blocked. Switch this session to Write mode to run it.")
+    setSessionModeAttention((current) => current + 1)
+  }, [])
 
   const execute = useCallback(async () => {
     if (!activeTargetID || !statement.trim() || running) return
@@ -179,14 +191,16 @@ export default function WorkbenchPage() {
     setBatchRuns([])
     setRunning(true)
     setQueryError("")
+    setSessionModeError("")
     setBottomTab("results")
     try {
       const response = await api.post<QueryResult>(
         "/queries",
-        { target_id: activeTargetID, database_name: activeDatabaseName, statement: executableStatement },
+        { target_id: activeTargetID, database_name: activeDatabaseName, statement: executableStatement, read_only: !writeMode },
         { signal: controller.signal },
       )
       setResult(response.data)
+      setSessionModeError("")
       if (statementIndicatorRevision.current === executedRevision && statementRangeKey(statementRangeForEditor(editorRef.current)) === executedRangeKey) {
         statementIndicatorStatus.current = "success"
         updateStatementIndicatorRef.current()
@@ -195,7 +209,9 @@ export default function WorkbenchPage() {
       void queryClient.invalidateQueries({ queryKey: ["queryHistory"] })
     } catch (error) {
       if (!controller.signal.aborted) {
-        setQueryError(getErrorMessage(error))
+        const errorMessage = getErrorMessage(error)
+        if (getErrorCode(error) === "read_only_violation") signalReadOnlyViolation()
+        setQueryError(errorMessage)
         if (statementIndicatorRevision.current === executedRevision && statementRangeKey(statementRangeForEditor(editorRef.current)) === executedRangeKey) {
           statementIndicatorStatus.current = "error"
           updateStatementIndicatorRef.current()
@@ -206,7 +222,7 @@ export default function WorkbenchPage() {
       abortController.current = null
       setRunning(false)
     }
-  }, [activeDatabaseName, activeTargetID, queryClient, running, statement])
+  }, [activeDatabaseName, activeTargetID, queryClient, running, signalReadOnlyViolation, statement, writeMode])
 
   const executeAll = useCallback(async () => {
     if (!activeTargetID || !statement.trim() || running) return
@@ -238,6 +254,7 @@ export default function WorkbenchPage() {
     setSelectedBatchRunIndex(0)
     setResult(null)
     setQueryError("")
+    setSessionModeError("")
     setBottomTab("results")
     setRunning(true)
 
@@ -257,10 +274,11 @@ export default function WorkbenchPage() {
         try {
           const response = await api.post<QueryResult>(
             "/queries",
-            { target_id: activeTargetID, database_name: activeDatabaseName, statement: statements[index] },
+            { target_id: activeTargetID, database_name: activeDatabaseName, statement: statements[index], read_only: !writeMode },
             { signal: controller.signal },
           )
           updateRun(index, { status: "succeeded", result: response.data })
+          setSessionModeError("")
           if (index === 0 && statementIndicatorRevision.current === executedRevision) {
             statementIndicatorStatus.current = "success"
             updateStatementIndicatorRef.current()
@@ -272,7 +290,9 @@ export default function WorkbenchPage() {
             skipRemaining(index)
             break
           }
-          updateRun(index, { status: "failed", error: getErrorMessage(error) })
+          const errorMessage = getErrorMessage(error)
+          if (getErrorCode(error) === "read_only_violation") signalReadOnlyViolation()
+          updateRun(index, { status: "failed", error: errorMessage })
           if (index === 0 && statementIndicatorRevision.current === executedRevision) {
             statementIndicatorStatus.current = "error"
             updateStatementIndicatorRef.current()
@@ -290,7 +310,7 @@ export default function WorkbenchPage() {
       abortController.current = null
       setRunning(false)
     }
-  }, [activeDatabaseName, activeTargetID, queryClient, runAllPolicy, running, statement])
+  }, [activeDatabaseName, activeTargetID, queryClient, runAllPolicy, running, signalReadOnlyViolation, statement, writeMode])
 
   const executeRef = useRef(execute)
   const executeAllRef = useRef(executeAll)
@@ -554,11 +574,12 @@ export default function WorkbenchPage() {
           )}
         </div>
         <div className="ml-auto flex items-center gap-1.5">
-          {!isAdmin && (
-            <span className="mr-1 rounded border border-gr-purple/25 bg-gr-purple/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-wide text-purple-300">
-              READ ONLY
-            </span>
-          )}
+          <span className={cn(
+            "mr-1 rounded border px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-wide",
+            writeMode ? "border-destructive/25 bg-destructive/10 text-destructive" : "border-gr-purple/25 bg-gr-purple/10 text-purple-300",
+          )}>
+            {writeMode ? "WRITE MODE" : "READ ONLY"}
+          </span>
           {running ? (
             <Button variant="destructive" size="sm" onClick={() => abortController.current?.abort()}>
               <CircleStop /> Stop
@@ -692,6 +713,18 @@ export default function WorkbenchPage() {
                 />
               ))}
             </div>
+            <SessionModeControl
+              mode={writeMode ? "write" : "read"}
+              isAdmin={isAdmin}
+              disabled={running}
+              error={sessionModeError}
+              attentionKey={sessionModeAttention}
+              onModeChange={(mode) => {
+                if (mode === "write" && !isAdmin) return
+                setSessionMode(mode)
+                setSessionModeError("")
+              }}
+            />
         </aside>
 
         <main
@@ -923,6 +956,76 @@ export default function WorkbenchPage() {
         onOpenChange={(open) => !open && setTargetPendingDeletion(null)}
         onConfirm={() => targetPendingDeletion && void deleteTarget(targetPendingDeletion)}
       />
+    </div>
+  )
+}
+
+function SessionModeControl({
+  mode,
+  isAdmin,
+  disabled,
+  error,
+  attentionKey,
+  onModeChange,
+}: {
+  mode: SessionMode
+  isAdmin: boolean
+  disabled: boolean
+  error: string
+  attentionKey: number
+  onModeChange: (mode: SessionMode) => void
+}) {
+  return (
+    <div className="shrink-0 border-t bg-[#0d0c11] p-2">
+      <div
+        key={attentionKey}
+        className={cn(
+          "rounded-lg border bg-black/20 p-2 transition-[border-color,background-color,box-shadow] duration-200",
+          error && "workbench-mode-shake border-destructive/40 bg-destructive/[0.06] shadow-[0_0_18px_rgba(255,91,113,0.08)]",
+        )}
+      >
+        <div className="mb-2 flex items-center gap-2 px-0.5">
+          <div className={cn("size-1.5 rounded-full", mode === "write" ? "bg-destructive shadow-[0_0_8px_rgba(255,91,113,0.55)]" : "bg-gr-purple shadow-[0_0_8px_rgba(132,18,252,0.45)]")} />
+          <span className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Query session</span>
+          <span className={cn("ml-auto font-mono text-[9px] font-semibold", mode === "write" ? "text-destructive" : "text-purple-300")}>
+            {mode === "write" ? "WRITE" : "READ ONLY"}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 rounded-md border bg-black/25 p-0.5">
+          <button
+            type="button"
+            aria-pressed={mode === "read"}
+            disabled={disabled}
+            className={cn(
+              "flex h-7 items-center justify-center gap-1.5 rounded text-[10px] font-medium text-muted-foreground transition-[color,background-color,box-shadow,transform] duration-150 outline-none hover:text-foreground active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transform-none motion-reduce:transition-none",
+              mode === "read" && "bg-gr-purple/15 text-purple-200 shadow-sm",
+            )}
+            onClick={() => onModeChange("read")}
+          >
+            <LockKeyhole className="size-3" /> Read only
+          </button>
+          <button
+            type="button"
+            aria-pressed={mode === "write"}
+            aria-disabled={!isAdmin || disabled}
+            disabled={!isAdmin || disabled}
+            className={cn(
+              "flex h-7 items-center justify-center gap-1.5 rounded text-[10px] font-medium text-muted-foreground transition-[color,background-color,box-shadow,transform] duration-150 outline-none hover:text-foreground active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-35 motion-reduce:transform-none motion-reduce:transition-none",
+              mode === "write" && "bg-destructive/15 text-red-200 shadow-sm",
+            )}
+            onClick={() => onModeChange("write")}
+          >
+            <PenLine className="size-3" /> Write
+          </button>
+        </div>
+        {error ? (
+          <p role="alert" className="mt-2 px-0.5 text-[10px] leading-relaxed text-destructive">{error}</p>
+        ) : !isAdmin ? (
+          <p className="mt-2 px-0.5 text-[10px] leading-relaxed text-muted-foreground">WorkbenchAdmins membership is required for writes.</p>
+        ) : mode === "write" ? (
+          <p className="mt-2 px-0.5 text-[10px] leading-relaxed text-muted-foreground">Writes and schema changes are enabled for this session.</p>
+        ) : null}
+      </div>
     </div>
   )
 }

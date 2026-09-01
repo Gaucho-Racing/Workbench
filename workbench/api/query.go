@@ -16,6 +16,7 @@ func ExecuteQuery(c *gin.Context) {
 		TargetID     string `json:"target_id" binding:"required"`
 		DatabaseName string `json:"database_name"`
 		Statement    string `json:"statement" binding:"required"`
+		ReadOnly     *bool  `json:"read_only"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -44,15 +45,25 @@ func ExecuteQuery(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	readOnly := true
+	if request.ReadOnly != nil {
+		readOnly = *request.ReadOnly
+	}
+	readOnly = readOnly || !requestTokenHasGroup(c, AdminGroupName)
 	result, err := service.ExecuteQuery(
 		c.Request.Context(),
 		target,
 		request.Statement,
 		getRequestTokenEntityID(c),
-		!requestTokenHasGroup(c, AdminGroupName),
+		readOnly,
 	)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "run_id": result.RunID})
+		response := gin.H{"error": err.Error(), "run_id": result.RunID}
+		if readOnly && service.IsReadOnlyViolation(err) {
+			response["code"] = "read_only_violation"
+			response["error"] = "This statement requires Write mode."
+		}
+		c.JSON(http.StatusBadRequest, response)
 		return
 	}
 	c.JSON(http.StatusOK, result)

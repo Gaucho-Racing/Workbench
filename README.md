@@ -1,4 +1,8 @@
-<h1><img src="assets/workbench.png" alt="Workbench logo" width="32" align="middle" /> Workbench</h1>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/workbench-header-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/workbench-header-light.svg" />
+  <img src="assets/workbench-header-light.svg" alt="Workbench" width="232" />
+</picture>
 
 [![build](https://github.com/Gaucho-Racing/Workbench/actions/workflows/build.yml/badge.svg)](https://github.com/Gaucho-Racing/Workbench/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/release/gaucho-racing/workbench.svg?style=flat-square)](https://github.com/gaucho-racing/workbench/releases)

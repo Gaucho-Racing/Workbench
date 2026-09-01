@@ -10,7 +10,6 @@ import {
   Columns3,
   Copy,
   Database,
-  DatabaseZap,
   Download,
   FileCode2,
   GitFork,
@@ -38,6 +37,7 @@ import { toast } from "sonner"
 import { ConfirmationDialog } from "@/components/ConfirmationDialog"
 import type { CompletedImport } from "@/components/DataImportDialog"
 import type { ExportFormat } from "@/components/ExportDialog"
+import { WorkbenchLogo } from "@/components/WorkbenchLogo"
 import { Button } from "@/components/ui/button"
 import {
   ContextMenu,
@@ -709,9 +709,7 @@ export default function WorkbenchPage() {
           <span className="sr-only">Toggle connections</span>
         </Button>
         <div className="flex items-center gap-2 pr-3">
-          <div className="grid size-7 place-items-center rounded-md bg-gradient-to-br from-gr-purple to-gr-pink shadow-sm shadow-gr-purple/20">
-            <DatabaseZap className="size-4 text-white" />
-          </div>
+          <WorkbenchLogo className="size-7 rounded-md shadow-sm shadow-gr-purple/20" />
           <span className="font-brand text-sm font-semibold tracking-tight">Workbench</span>
         </div>
         <div className="h-5 w-px bg-border" />

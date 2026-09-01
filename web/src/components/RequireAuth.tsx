@@ -1,7 +1,6 @@
 import { Navigate, Outlet, useLocation } from "react-router-dom"
 
-import { DatabaseZap } from "lucide-react"
-
+import { WorkbenchLogo } from "@/components/WorkbenchLogo"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth"
 
@@ -28,9 +27,7 @@ export function RequireAuth() {
       <main className="relative flex h-full items-center justify-center overflow-hidden bg-black px-6">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_34%_26%,rgba(132,18,252,0.18),transparent_35%),radial-gradient(circle_at_69%_68%,rgba(225,5,163,0.13),transparent_38%)]" />
         <div className="relative flex max-w-sm flex-col items-center text-center">
-          <div className="mb-5 grid size-12 place-items-center rounded-xl border border-white/10 bg-gradient-to-br from-gr-purple to-gr-pink shadow-2xl shadow-gr-purple/20">
-            <DatabaseZap className="size-6 text-white" />
-          </div>
+          <WorkbenchLogo className="mb-5 size-12 rounded-xl shadow-2xl shadow-gr-purple/20" />
           <h1 className="text-xl font-semibold tracking-tight">Workbench access required</h1>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             Your Sentinel account is not a member of WorkbenchViewers or WorkbenchAdmins.

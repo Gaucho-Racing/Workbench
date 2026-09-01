@@ -1,5 +1,9 @@
 # Workbench
 
+<p align="center">
+  <img src="assets/workbench.png" alt="Workbench" width="160" />
+</p>
+
 [![build](https://github.com/Gaucho-Racing/Workbench/actions/workflows/build.yml/badge.svg)](https://github.com/Gaucho-Racing/Workbench/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/release/gaucho-racing/workbench.svg?style=flat-square)](https://github.com/gaucho-racing/workbench/releases)
 

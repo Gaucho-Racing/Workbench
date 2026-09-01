@@ -9,7 +9,7 @@ COPY . ./
 
 ARG VITE_API_URL=""
 ARG VITE_SENTINEL_URL="https://sso.gauchoracing.com"
-ARG VITE_SENTINEL_CLIENT_ID=""
+ARG VITE_SENTINEL_CLIENT_ID="rmgwGSAfAx9Q"
 
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_SENTINEL_URL=$VITE_SENTINEL_URL
@@ -23,4 +23,3 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s CMD wget -q --spider http://localhost/ || exit 1
-

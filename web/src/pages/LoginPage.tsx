@@ -7,7 +7,7 @@ import { api, getErrorMessage } from "@/lib/api"
 import { clearSession, saveSession } from "@/lib/auth"
 
 const sentinelURL = import.meta.env.VITE_SENTINEL_URL ?? "https://sso.gauchoracing.com"
-const sentinelClientID = import.meta.env.VITE_SENTINEL_CLIENT_ID ?? ""
+const sentinelClientID = import.meta.env.VITE_SENTINEL_CLIENT_ID ?? "rmgwGSAfAx9Q"
 const oauthConfigurationError = sentinelClientID
   ? ""
   : "Workbench OAuth is not configured. Set VITE_SENTINEL_CLIENT_ID before building the web application."

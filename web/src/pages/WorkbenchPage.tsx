@@ -8,9 +8,11 @@ import {
   CircleStop,
   Clock3,
   Columns3,
+  Copy,
   Database,
   DatabaseZap,
   Download,
+  FileCode2,
   GitFork,
   LogOut,
   Menu,
@@ -34,6 +36,14 @@ import { toast } from "sonner"
 import { ConfirmationDialog } from "@/components/ConfirmationDialog"
 import type { ExportFormat } from "@/components/ExportDialog"
 import { Button } from "@/components/ui/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { api, getErrorMessage } from "@/lib/api"
@@ -50,7 +60,15 @@ import {
   useTargets,
 } from "@/lib/database"
 import { cn } from "@/lib/utils"
-import { sqlStatementRanges, statementForEditor, statementRangeAtOffset, statementRangeForEditor, type SQLStatementRange } from "@/lib/sql"
+import {
+  qualifiedSQLIdentifier,
+  selectStatementForTable,
+  sqlStatementRanges,
+  statementForEditor,
+  statementRangeAtOffset,
+  statementRangeForEditor,
+  type SQLStatementRange,
+} from "@/lib/sql"
 
 type StatementIndicatorStatus = "idle" | "success" | "error"
 type RunAllPolicy = "abort" | "continue"
@@ -81,6 +99,9 @@ const DataImportDialog = lazy(() =>
 const ExportDialog = lazy(() =>
   import("@/components/ExportDialog").then((module) => ({ default: module.ExportDialog })),
 )
+const DDLDialog = lazy(() =>
+  import("@/components/DDLDialog").then((module) => ({ default: module.DDLDialog })),
+)
 
 export default function WorkbenchPage() {
   const queryClient = useQueryClient()
@@ -101,6 +122,7 @@ export default function WorkbenchPage() {
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv")
   const [exportStatement, setExportStatement] = useState("")
+  const [ddlTable, setDDLTable] = useState<CatalogTable | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [bottomTab, setBottomTab] = useState<"results" | "history">("results")
   const [bottomPaneCollapsed, setBottomPaneCollapsed] = useState(false)
@@ -407,7 +429,23 @@ export default function WorkbenchPage() {
   }
 
   function openTable(table: CatalogTable) {
-    setStatement(`select *\nfrom "${table.schema}"."${table.name}"\nlimit 100;`)
+    setStatement(selectStatementForTable(table.schema, table.name, 100))
+    setWorkspaceView("query")
+  }
+
+  function openTableExport(table: CatalogTable) {
+    if (!isAdmin || !activeTargetID || !activeDatabaseName) return
+    setExportStatement(selectStatementForTable(table.schema, table.name))
+    setExportDialogOpen(true)
+  }
+
+  async function copyTableText(value: string, successMessage: string) {
+    try {
+      await navigator.clipboard.writeText(value)
+      toast.success(successMessage)
+    } catch {
+      toast.error("Could not access the clipboard")
+    }
   }
 
   function selectDatabase(targetID: string, databaseName: string) {
@@ -639,6 +677,11 @@ export default function WorkbenchPage() {
                   onSelect={() => setSelectedTargetID(target.id)}
                   onSelectDatabase={(databaseName) => selectDatabase(target.id, databaseName)}
                   onOpenTable={openTable}
+                  onViewDDL={setDDLTable}
+                  onExportTable={openTableExport}
+                  onCopyQualifiedName={(table) => void copyTableText(qualifiedSQLIdentifier(table.schema, table.name), "Qualified name copied")}
+                  onCopySelect={(table) => void copyTableText(selectStatementForTable(table.schema, table.name, 100), "SELECT statement copied")}
+                  canExport={isAdmin}
                   canManage={isAdmin}
                   onEdit={() => openEditConnection(target)}
                   onDelete={() => setTargetPendingDeletion(target)}
@@ -846,6 +889,17 @@ export default function WorkbenchPage() {
           />
         </Suspense>
       )}
+      {ddlTable && selectedTarget && activeDatabaseName && (
+        <Suspense fallback={null}>
+          <DDLDialog
+            open
+            onOpenChange={(open) => !open && setDDLTable(null)}
+            target={selectedTarget}
+            databaseName={activeDatabaseName}
+            table={ddlTable}
+          />
+        </Suspense>
+      )}
       <ConfirmationDialog
         open={targetPendingDeletion !== null}
         title="Remove database connection?"
@@ -873,6 +927,11 @@ function TargetTree({
   onSelect,
   onSelectDatabase,
   onOpenTable,
+  onViewDDL,
+  onExportTable,
+  onCopyQualifiedName,
+  onCopySelect,
+  canExport,
   canManage,
   onEdit,
   onDelete,
@@ -888,6 +947,11 @@ function TargetTree({
   onSelect: () => void
   onSelectDatabase: (databaseName: string) => void
   onOpenTable: (table: CatalogTable) => void
+  onViewDDL: (table: CatalogTable) => void
+  onExportTable: (table: CatalogTable) => void
+  onCopyQualifiedName: (table: CatalogTable) => void
+  onCopySelect: (table: CatalogTable) => void
+  canExport: boolean
   canManage: boolean
   onEdit: () => void
   onDelete: () => void
@@ -950,7 +1014,17 @@ function TargetTree({
                   <div className="pl-10">
                     {catalogLoading && <SidebarMessage>Loading objects…</SidebarMessage>}
                     {!catalogLoading && Array.from(schemas.entries()).map(([schema, tables]) => (
-                      <SchemaTree key={schema} schema={schema} tables={tables} onOpenTable={onOpenTable} />
+                      <SchemaTree
+                        key={schema}
+                        schema={schema}
+                        tables={tables}
+                        onOpenTable={onOpenTable}
+                        onViewDDL={onViewDDL}
+                        onExportTable={onExportTable}
+                        onCopyQualifiedName={onCopyQualifiedName}
+                        onCopySelect={onCopySelect}
+                        canExport={canExport}
+                      />
                     ))}
                     {!catalogLoading && catalog.length === 0 && <SidebarMessage>No objects found</SidebarMessage>}
                   </div>
@@ -965,7 +1039,25 @@ function TargetTree({
   )
 }
 
-function SchemaTree({ schema, tables, onOpenTable }: { schema: string; tables: CatalogTable[]; onOpenTable: (table: CatalogTable) => void }) {
+function SchemaTree({
+  schema,
+  tables,
+  onOpenTable,
+  onViewDDL,
+  onExportTable,
+  onCopyQualifiedName,
+  onCopySelect,
+  canExport,
+}: {
+  schema: string
+  tables: CatalogTable[]
+  onOpenTable: (table: CatalogTable) => void
+  onViewDDL: (table: CatalogTable) => void
+  onExportTable: (table: CatalogTable) => void
+  onCopyQualifiedName: (table: CatalogTable) => void
+  onCopySelect: (table: CatalogTable) => void
+  canExport: boolean
+}) {
   const [expanded, setExpanded] = useState(true)
   return (
     <div>
@@ -975,10 +1067,33 @@ function SchemaTree({ schema, tables, onOpenTable }: { schema: string; tables: C
       </button>
       {expanded &&
         tables.map((table) => (
-          <button key={table.name} className="flex h-7 w-full items-center gap-2 pr-2 pl-6 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/40 hover:text-foreground motion-reduce:transition-none" onDoubleClick={() => onOpenTable(table)} onClick={() => onOpenTable(table)}>
-            <Table2 className="size-3.5" />
-            <span className="truncate">{table.name}</span>
-          </button>
+          <ContextMenu key={table.name}>
+            <ContextMenuTrigger asChild>
+              <button className="flex h-7 w-full items-center gap-2 pr-2 pl-6 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/40 hover:text-foreground data-[state=open]:bg-muted/55 data-[state=open]:text-foreground motion-reduce:transition-none" onDoubleClick={() => onOpenTable(table)} onClick={() => onOpenTable(table)}>
+                <Table2 className="size-3.5" />
+                <span className="truncate">{table.name}</span>
+              </button>
+            </ContextMenuTrigger>
+            <ContextMenuContent>
+              <ContextMenuItem onSelect={() => onOpenTable(table)}>
+                <Play /> Open query
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => onViewDDL(table)}>
+                <FileCode2 /> View DDL
+              </ContextMenuItem>
+              <ContextMenuItem disabled={!canExport} onSelect={() => onExportTable(table)}>
+                <Download /> Export table
+                {!canExport && <ContextMenuShortcut>ADMIN</ContextMenuShortcut>}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => onCopyQualifiedName(table)}>
+                <Copy /> Copy qualified name
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => onCopySelect(table)}>
+                <Copy /> Copy SELECT statement
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
         ))}
     </div>
   )

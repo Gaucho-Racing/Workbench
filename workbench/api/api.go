@@ -85,6 +85,7 @@ func initializeRoutes(router *gin.Engine) {
 	member.GET("/targets", ListTargets)
 	member.GET("/targets/:id/databases", ListTargetDatabases)
 	member.GET("/targets/:id/catalog", GetCatalog)
+	member.GET("/targets/:id/ddl", GetRelationDDL)
 	member.POST("/queries", ExecuteQuery)
 	member.GET("/queries", ListQueryRuns)
 

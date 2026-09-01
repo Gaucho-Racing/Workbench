@@ -5,6 +5,19 @@ export type SQLStatementRange = {
   end: number
 }
 
+export function qualifiedSQLIdentifier(schema: string, relation: string) {
+  return `${quoteSQLIdentifier(schema)}.${quoteSQLIdentifier(relation)}`
+}
+
+export function selectStatementForTable(schema: string, relation: string, limit?: number) {
+  const limitClause = limit === undefined ? ";" : `\nlimit ${limit};`
+  return `select *\nfrom ${qualifiedSQLIdentifier(schema, relation)}${limitClause}`
+}
+
+function quoteSQLIdentifier(value: string) {
+  return `"${value.replaceAll('"', '""')}"`
+}
+
 export function statementForEditor(instance: editor.IStandaloneCodeEditor | null, fallback: string) {
   const model = instance?.getModel()
   if (!instance || !model) return fallback.trim()

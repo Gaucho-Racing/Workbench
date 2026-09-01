@@ -1,0 +1,54 @@
+gateway:
+  name: workbench-gateway
+  version: 0.1.0
+  env: ${ENV:DEV}
+  timeouts:
+    dial: 5s
+    headers: 45s
+    idle: 60s
+    overall: 0
+
+listeners:
+  gateway:
+    port: "10310"
+    cors:
+      enabled: true
+      allowed_origins: ["*"]
+      allow_credentials: false
+  admin:
+    port: "10300"
+    auth:
+      type: basic
+      username: ${KERBECS_USER:admin}
+      password: ${KERBECS_PASSWORD:admin}
+
+providers:
+  static:
+    watch: false
+
+upstreams:
+  workbench:
+    name: workbench
+    version: 0.1.0
+    instances:
+      - http://workbench:9999
+  web:
+    name: workbench-web
+    version: 0.1.0
+    instances:
+      - http://web:5173
+
+routes:
+  - name: workbench-api
+    match:
+      path: /api/*
+    upstream: workbench
+    rewrite:
+      strip_prefix: /api
+    envelope: passthrough
+  - name: workbench-web
+    match:
+      path: /*
+    upstream: web
+    envelope: passthrough
+

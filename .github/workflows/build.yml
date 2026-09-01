@@ -1,0 +1,58 @@
+name: build
+run-name: Check Workbench image builds
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "**"
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit SHA to check. Defaults to main.
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build
+    steps:
+      - name: Check workflow results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          INPUT_SHA: ${{ inputs.sha }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sha="$INPUT_SHA"
+          [ -n "$sha" ] || sha="$CURRENT_SHA"
+          [ -n "$sha" ] || sha="$(gh api "repos/$REPO/branches/main" --jq '.commit.sha')"
+
+          wait_for_workflow() {
+            label="$1"
+            workflow="$2"
+            for attempt in $(seq 1 90); do
+              result="$(gh api --method GET "repos/$REPO/actions/workflows/$workflow/runs" -f head_sha="$sha" -f per_page=1 --jq '(.workflow_runs[0] // empty) | [.status, (.conclusion // ""), .html_url] | @tsv')"
+              if [ -n "$result" ]; then
+                IFS=$'\t' read -r status conclusion url <<< "$result"
+                echo "$label: $status ${conclusion:-pending} $url"
+                if [ "$status" = "completed" ]; then
+                  [ "$conclusion" = "success" ] && return 0
+                  return 1
+                fi
+              fi
+              [ "$attempt" -lt 90 ] || return 1
+              sleep 10
+            done
+          }
+
+          wait_for_workflow "workbench" "workbench.yml"
+          wait_for_workflow "web" "web.yml"
+

@@ -1,0 +1,9 @@
+FROM golang:1.26-alpine
+
+RUN apk --no-cache add ca-certificates git
+RUN go install github.com/air-verse/air@latest
+
+WORKDIR /app
+
+CMD ["air"]
+

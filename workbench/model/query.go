@@ -6,6 +6,7 @@ type QueryRun struct {
 	ID            string    `json:"id"`
 	TargetID      string    `json:"target_id"`
 	TargetName    string    `json:"target_name,omitempty"`
+	DatabaseName  string    `json:"database_name"`
 	ActorEntityID string    `json:"actor_entity_id"`
 	Statement     string    `json:"statement"`
 	Status        string    `json:"status"`
@@ -22,11 +23,12 @@ type QueryColumn struct {
 }
 
 type QueryResult struct {
-	RunID      string          `json:"run_id"`
-	Columns    []QueryColumn   `json:"columns"`
-	Rows       [][]interface{} `json:"rows"`
-	CommandTag string          `json:"command_tag"`
-	RowCount   int64           `json:"row_count"`
-	DurationMS int64           `json:"duration_ms"`
-	Truncated  bool            `json:"truncated"`
+	RunID        string          `json:"run_id"`
+	DatabaseName string          `json:"database_name"`
+	Columns      []QueryColumn   `json:"columns"`
+	Rows         [][]interface{} `json:"rows"`
+	CommandTag   string          `json:"command_tag"`
+	RowCount     int64           `json:"row_count"`
+	DurationMS   int64           `json:"duration_ms"`
+	Truncated    bool            `json:"truncated"`
 }

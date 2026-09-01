@@ -82,6 +82,7 @@ func initializeRoutes(router *gin.Engine) {
 	authenticated.POST("/targets", CreateTarget)
 	authenticated.DELETE("/targets/:id", DeleteTarget)
 	authenticated.POST("/targets/:id/test", TestTarget)
+	authenticated.GET("/targets/:id/databases", ListTargetDatabases)
 	authenticated.GET("/targets/:id/catalog", GetCatalog)
 	authenticated.POST("/queries", ExecuteQuery)
 	authenticated.GET("/queries", ListQueryRuns)

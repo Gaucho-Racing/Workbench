@@ -40,6 +40,7 @@ func GetCatalog(ctx context.Context, target model.DatabaseTarget) (Catalog, erro
 	if err != nil {
 		return Catalog{}, err
 	}
+	defer pool.Release()
 	rows, err := pool.Query(ctx, `
 		SELECT n.nspname,
 		       c.relname,

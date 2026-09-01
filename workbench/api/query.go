@@ -13,8 +13,9 @@ const maxStatementBytes = 1024 * 1024
 
 func ExecuteQuery(c *gin.Context) {
 	var request struct {
-		TargetID  string `json:"target_id" binding:"required"`
-		Statement string `json:"statement" binding:"required"`
+		TargetID     string `json:"target_id" binding:"required"`
+		DatabaseName string `json:"database_name"`
+		Statement    string `json:"statement" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -32,6 +33,15 @@ func ExecuteQuery(c *gin.Context) {
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	target, err = service.SelectDatabase(c.Request.Context(), target, request.DatabaseName)
+	if errors.Is(err, service.ErrDatabaseUnavailable) {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 	result, err := service.ExecuteQuery(c.Request.Context(), target, request.Statement, getRequestTokenEntityID(c))

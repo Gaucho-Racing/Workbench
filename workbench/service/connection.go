@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,19 +16,30 @@ import (
 )
 
 type pooledTarget struct {
-	pool      *pgxpool.Pool
-	updatedAt time.Time
+	pool           *pgxpool.Pool
+	updatedAt      time.Time
+	lastUsed       time.Time
+	users          int
+	removeWhenIdle bool
 }
 
 type targetConnectionManager struct {
 	mu    sync.Mutex
-	pools map[string]pooledTarget
+	pools map[string]*pooledTarget
+}
+
+type targetPoolLease struct {
+	*pgxpool.Pool
+	release func()
+	once    sync.Once
 }
 
 var connectionManager *targetConnectionManager
 
+const maxTargetPools = 32
+
 func InitializeConnectionManager() {
-	connectionManager = &targetConnectionManager{pools: make(map[string]pooledTarget)}
+	connectionManager = &targetConnectionManager{pools: make(map[string]*pooledTarget)}
 }
 
 func CloseConnectionManager() {
@@ -41,8 +53,12 @@ func CloseConnectionManager() {
 	}
 }
 
-func TargetPool(ctx context.Context, target model.DatabaseTarget) (*pgxpool.Pool, error) {
+func TargetPool(ctx context.Context, target model.DatabaseTarget) (*targetPoolLease, error) {
 	return connectionManager.get(ctx, target)
+}
+
+func (lease *targetPoolLease) Release() {
+	lease.once.Do(lease.release)
 }
 
 func TestTarget(ctx context.Context, target model.DatabaseTarget) error {
@@ -56,30 +72,90 @@ func TestTarget(ctx context.Context, target model.DatabaseTarget) error {
 	return pool.Ping(pingContext)
 }
 
-func (manager *targetConnectionManager) get(ctx context.Context, target model.DatabaseTarget) (*pgxpool.Pool, error) {
+func (manager *targetConnectionManager) get(ctx context.Context, target model.DatabaseTarget) (*targetPoolLease, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if cached, ok := manager.pools[target.ID]; ok && cached.updatedAt.Equal(target.UpdatedAt) {
-		return cached.pool, nil
+	key := targetPoolKey(target)
+	if cached, ok := manager.pools[key]; ok && cached.updatedAt.Equal(target.UpdatedAt) {
+		cached.lastUsed = time.Now()
+		cached.users++
+		return manager.lease(key, cached), nil
 	} else if ok {
-		cached.pool.Close()
-		delete(manager.pools, target.ID)
+		if cached.users == 0 {
+			cached.pool.Close()
+			delete(manager.pools, key)
+		} else {
+			cached.removeWhenIdle = true
+			return nil, fmt.Errorf("database connection is being refreshed")
+		}
 	}
 	pool, err := newTargetPool(ctx, target)
 	if err != nil {
 		return nil, err
 	}
-	manager.pools[target.ID] = pooledTarget{pool: pool, updatedAt: target.UpdatedAt}
-	return pool, nil
+	manager.evictOldestPool()
+	cached := &pooledTarget{pool: pool, updatedAt: target.UpdatedAt, lastUsed: time.Now(), users: 1}
+	manager.pools[key] = cached
+	return manager.lease(key, cached), nil
+}
+
+func (manager *targetConnectionManager) lease(key string, cached *pooledTarget) *targetPoolLease {
+	return &targetPoolLease{
+		Pool: cached.pool,
+		release: func() {
+			manager.mu.Lock()
+			defer manager.mu.Unlock()
+			current, ok := manager.pools[key]
+			if !ok || current != cached {
+				return
+			}
+			current.users--
+			current.lastUsed = time.Now()
+			if current.users == 0 && current.removeWhenIdle {
+				current.pool.Close()
+				delete(manager.pools, key)
+			}
+		},
+	}
 }
 
 func (manager *targetConnectionManager) remove(id string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if cached, ok := manager.pools[id]; ok {
-		cached.pool.Close()
-		delete(manager.pools, id)
+	prefix := id + "\x00"
+	for key, cached := range manager.pools {
+		if strings.HasPrefix(key, prefix) {
+			if cached.users == 0 {
+				cached.pool.Close()
+				delete(manager.pools, key)
+			} else {
+				cached.removeWhenIdle = true
+			}
+		}
 	}
+}
+
+func (manager *targetConnectionManager) evictOldestPool() {
+	if len(manager.pools) < maxTargetPools {
+		return
+	}
+	oldestKey := ""
+	var oldestAccess time.Time
+	for key, cached := range manager.pools {
+		if cached.users == 0 && (oldestKey == "" || cached.lastUsed.Before(oldestAccess)) {
+			oldestKey = key
+			oldestAccess = cached.lastUsed
+		}
+	}
+	if oldestKey == "" {
+		return
+	}
+	manager.pools[oldestKey].pool.Close()
+	delete(manager.pools, oldestKey)
+}
+
+func targetPoolKey(target model.DatabaseTarget) string {
+	return target.ID + "\x00" + target.DatabaseName
 }
 
 func newTargetPool(ctx context.Context, target model.DatabaseTarget) (*pgxpool.Pool, error) {

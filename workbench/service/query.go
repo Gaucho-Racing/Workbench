@@ -17,13 +17,14 @@ func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement st
 	run := model.QueryRun{
 		ID:            ulid.Make().Prefixed("qry"),
 		TargetID:      target.ID,
+		DatabaseName:  target.DatabaseName,
 		ActorEntityID: actorEntityID,
 		Statement:     statement,
 		Status:        "RUNNING",
 	}
 	if _, err := database.Pool.Exec(ctx, `
-		INSERT INTO query_run (id, target_id, actor_entity_id, statement, status)
-		VALUES ($1, $2, $3, $4, $5)`, run.ID, run.TargetID, run.ActorEntityID, run.Statement, run.Status); err != nil {
+		INSERT INTO query_run (id, target_id, database_name, actor_entity_id, statement, status)
+		VALUES ($1, $2, $3, $4, $5, $6)`, run.ID, run.TargetID, run.DatabaseName, run.ActorEntityID, run.Statement, run.Status); err != nil {
 		return model.QueryResult{}, err
 	}
 
@@ -36,6 +37,7 @@ func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement st
 		finishQueryRun(context.Background(), run.ID, "FAILED", "", 0, time.Since(startedAt), err)
 		return model.QueryResult{RunID: run.ID}, err
 	}
+	defer pool.Release()
 	rows, err := pool.Query(queryContext, statement)
 	if err != nil {
 		finishQueryRun(context.Background(), run.ID, "FAILED", "", 0, time.Since(startedAt), err)
@@ -84,19 +86,20 @@ func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement st
 	duration := time.Since(startedAt)
 	finishQueryRun(context.Background(), run.ID, "SUCCEEDED", commandTag.String(), rowCount, duration, nil)
 	return model.QueryResult{
-		RunID:      run.ID,
-		Columns:    columns,
-		Rows:       resultRows,
-		CommandTag: commandTag.String(),
-		RowCount:   rowCount,
-		DurationMS: duration.Milliseconds(),
-		Truncated:  truncated,
+		RunID:        run.ID,
+		DatabaseName: target.DatabaseName,
+		Columns:      columns,
+		Rows:         resultRows,
+		CommandTag:   commandTag.String(),
+		RowCount:     rowCount,
+		DurationMS:   duration.Milliseconds(),
+		Truncated:    truncated,
 	}, nil
 }
 
 func ListQueryRuns(ctx context.Context, actorEntityID string, limit int) ([]model.QueryRun, error) {
 	rows, err := database.Pool.Query(ctx, `
-		SELECT q.id, q.target_id, t.name, q.actor_entity_id, q.statement, q.status,
+		SELECT q.id, q.target_id, t.name, q.database_name, q.actor_entity_id, q.statement, q.status,
 		       q.command_tag, q.row_count, q.duration_ms, q.error_message, q.created_at
 		FROM query_run q
 		JOIN database_target t ON t.id = q.target_id
@@ -110,7 +113,7 @@ func ListQueryRuns(ctx context.Context, actorEntityID string, limit int) ([]mode
 	runs := []model.QueryRun{}
 	for rows.Next() {
 		var run model.QueryRun
-		if err := rows.Scan(&run.ID, &run.TargetID, &run.TargetName, &run.ActorEntityID,
+		if err := rows.Scan(&run.ID, &run.TargetID, &run.TargetName, &run.DatabaseName, &run.ActorEntityID,
 			&run.Statement, &run.Status, &run.CommandTag, &run.RowCount, &run.DurationMS,
 			&run.ErrorMessage, &run.CreatedAt); err != nil {
 			return nil, err

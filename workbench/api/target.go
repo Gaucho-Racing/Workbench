@@ -61,6 +61,24 @@ func TestTarget(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+func ListTargetDatabases(c *gin.Context) {
+	target, err := service.GetTarget(c.Request.Context(), c.Param("id"))
+	if errors.Is(err, service.ErrTargetNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	databases, err := service.ListDatabases(c.Request.Context(), target)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, databases)
+}
+
 func GetCatalog(c *gin.Context) {
 	target, err := service.GetTarget(c.Request.Context(), c.Param("id"))
 	if errors.Is(err, service.ErrTargetNotFound) {
@@ -69,6 +87,15 @@ func GetCatalog(c *gin.Context) {
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	target, err = service.SelectDatabase(c.Request.Context(), target, c.Query("database"))
+	if errors.Is(err, service.ErrDatabaseUnavailable) {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 	catalog, err := service.GetCatalog(c.Request.Context(), target)

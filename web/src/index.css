@@ -95,13 +95,25 @@
 }
 
 .monaco-editor .workbench-statement-rail {
-  width: 3px !important;
-  margin-left: 5px;
+  position: absolute;
+  z-index: 5;
+  width: 3px;
   border-radius: 999px;
+  pointer-events: none;
+  background: rgb(167 163 173 / 55%);
+  box-shadow: none;
+}
+
+.monaco-editor .workbench-statement-rail[data-status="success"] {
   background: linear-gradient(180deg, var(--gr-purple), var(--gr-pink));
   box-shadow: 0 0 8px rgb(225 5 163 / 22%);
 }
 
+.monaco-editor .workbench-statement-rail[data-status="error"] {
+  background: var(--destructive);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--destructive) 45%, transparent);
+}
+
 .monaco-editor .workbench-statement-line-number {
-  color: color-mix(in oklab, var(--gr-pink) 48%, #a7a3ad) !important;
+  color: #a7a3ad !important;
 }

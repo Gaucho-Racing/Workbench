@@ -48,7 +48,9 @@ import {
   useTargets,
 } from "@/lib/database"
 import { cn } from "@/lib/utils"
-import { statementForEditor, statementRangeForEditor } from "@/lib/sql"
+import { statementForEditor, statementRangeForEditor, type SQLStatementRange } from "@/lib/sql"
+
+type StatementIndicatorStatus = "idle" | "success" | "error"
 
 const initialStatement = `select
   current_database() as database,
@@ -90,6 +92,12 @@ export default function WorkbenchPage() {
   const [exporting, setExporting] = useState(false)
   const abortController = useRef<AbortController | null>(null)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
+  const statementDecoration = useRef<editor.IEditorDecorationsCollection | null>(null)
+  const statementRailElement = useRef<HTMLDivElement | null>(null)
+  const statementIndicatorDisposables = useRef<{ dispose: () => void }[]>([])
+  const statementIndicatorStatus = useRef<StatementIndicatorStatus>("idle")
+  const statementIndicatorRevision = useRef(0)
+  const updateStatementIndicatorRef = useRef<() => void>(() => undefined)
   const workspaceRef = useRef<HTMLElement | null>(null)
   const bottomPaneResizingRef = useRef(false)
 
@@ -115,8 +123,13 @@ export default function WorkbenchPage() {
     if (!activeTargetID || !statement.trim() || running) return
     const executableStatement = statementForEditor(editorRef.current, statement)
     if (!executableStatement) return
+    const executedRange = statementRangeForEditor(editorRef.current)
+    const executedRangeKey = statementRangeKey(executedRange)
+    const executedRevision = statementIndicatorRevision.current
     const controller = new AbortController()
     abortController.current = controller
+    statementIndicatorStatus.current = "idle"
+    updateStatementIndicatorRef.current()
     setRunning(true)
     setQueryError("")
     setBottomTab("results")
@@ -127,11 +140,19 @@ export default function WorkbenchPage() {
         { signal: controller.signal },
       )
       setResult(response.data)
+      if (statementIndicatorRevision.current === executedRevision && statementRangeKey(statementRangeForEditor(editorRef.current)) === executedRangeKey) {
+        statementIndicatorStatus.current = "success"
+        updateStatementIndicatorRef.current()
+      }
       setBottomPaneCollapsed(false)
       void queryClient.invalidateQueries({ queryKey: ["queryHistory"] })
     } catch (error) {
       if (!controller.signal.aborted) {
         setQueryError(getErrorMessage(error))
+        if (statementIndicatorRevision.current === executedRevision && statementRangeKey(statementRangeForEditor(editorRef.current)) === executedRangeKey) {
+          statementIndicatorStatus.current = "error"
+          updateStatementIndicatorRef.current()
+        }
         setBottomPaneCollapsed(false)
       }
     } finally {
@@ -143,8 +164,6 @@ export default function WorkbenchPage() {
   const executeRef = useRef(execute)
   const catalogRef = useRef<CatalogTable[]>([])
   const completionDisposable = useRef<{ dispose: () => void } | null>(null)
-  const statementDecoration = useRef<editor.IEditorDecorationsCollection | null>(null)
-  const statementIndicatorDisposables = useRef<{ dispose: () => void }[]>([])
 
   useEffect(() => {
     executeRef.current = execute
@@ -161,6 +180,7 @@ export default function WorkbenchPage() {
   useEffect(() => () => {
     completionDisposable.current?.dispose()
     statementDecoration.current?.clear()
+    statementRailElement.current?.remove()
     statementIndicatorDisposables.current.forEach((disposable) => disposable.dispose())
   }, [])
 
@@ -203,30 +223,53 @@ export default function WorkbenchPage() {
     completionDisposable.current = monaco.languages.registerCompletionItemProvider("pgsql", completionProvider)
 
     statementDecoration.current?.clear()
+    statementRailElement.current?.remove()
     statementIndicatorDisposables.current.forEach((disposable) => disposable.dispose())
     const decoration = editor.createDecorationsCollection()
+    const rail = document.createElement("div")
+    rail.className = "workbench-statement-rail"
+    rail.setAttribute("aria-hidden", "true")
+    editor.getDomNode()?.appendChild(rail)
     statementDecoration.current = decoration
+    statementRailElement.current = rail
     const updateStatementIndicator = () => {
       const model = editor.getModel()
       const range = statementRangeForEditor(editor)
       if (!model || !range) {
         decoration.clear()
+        rail.hidden = true
         return
       }
       const start = model.getPositionAt(range.start)
       const end = model.getPositionAt(Math.max(range.start, range.end - 1))
+      const layout = editor.getLayoutInfo()
+      const top = editor.getTopForLineNumber(start.lineNumber) - editor.getScrollTop()
+      const bottom = editor.getTopForLineNumber(end.lineNumber) - editor.getScrollTop()
+      const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight)
+      rail.hidden = false
+      rail.dataset.status = statementIndicatorStatus.current
+      rail.style.left = `${Math.max(2, layout.lineNumbersLeft - 7)}px`
+      rail.style.top = `${top}px`
+      rail.style.height = `${bottom - top + lineHeight}px`
       decoration.set([{
         range: new monaco.Range(start.lineNumber, 1, end.lineNumber, model.getLineMaxColumn(end.lineNumber)),
         options: {
           isWholeLine: true,
-          linesDecorationsClassName: "workbench-statement-rail",
           lineNumberClassName: "workbench-statement-line-number",
         },
       }])
     }
+    const resetStatementIndicator = () => {
+      statementIndicatorRevision.current += 1
+      statementIndicatorStatus.current = "idle"
+      updateStatementIndicator()
+    }
+    updateStatementIndicatorRef.current = updateStatementIndicator
     statementIndicatorDisposables.current = [
-      editor.onDidChangeCursorSelection(updateStatementIndicator),
-      editor.onDidChangeModelContent(updateStatementIndicator),
+      editor.onDidChangeCursorSelection(resetStatementIndicator),
+      editor.onDidChangeModelContent(resetStatementIndicator),
+      editor.onDidScrollChange(updateStatementIndicator),
+      editor.onDidLayoutChange(updateStatementIndicator),
     ]
     updateStatementIndicator()
   }
@@ -869,6 +912,10 @@ function SidebarMessage({ children }: { children: React.ReactNode }) {
 
 function CenteredMessage({ children }: { children: React.ReactNode }) {
   return <div className="grid h-full place-items-center text-xs text-muted-foreground">{children}</div>
+}
+
+function statementRangeKey(range: SQLStatementRange | null) {
+  return range ? `${range.start}:${range.end}` : ""
 }
 
 async function exportErrorMessage(error: unknown) {

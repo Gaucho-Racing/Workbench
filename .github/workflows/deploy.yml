@@ -7,7 +7,7 @@ on:
 
 env:
   INFRA_REPO: Gaucho-Racing/infrastructure
-  KUSTOMIZATION: kubernetes/gr-foundry/manifests/workbench/kustomization.yaml
+  KUSTOMIZATION: infra/kubernetes/gr-foundry/manifests/workbench/kustomization.yaml
 
 jobs:
   infra-pr:
@@ -16,33 +16,42 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Checkout Workbench
+      - name: Checkout Workbench (full history + tags)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
-      - name: Pull infrastructure token
+
+      - name: Pull secrets
         id: vault
         uses: Gaucho-Racing/vault-pull-secrets@v1
         with:
           secrets: infrastructure.pr_token
+
       - name: Checkout infrastructure
         uses: actions/checkout@v4
         with:
           repository: ${{ env.INFRA_REPO }}
           token: ${{ fromJSON(steps.vault.outputs.secrets_json).PR_TOKEN }}
           path: infra
+
       - name: Resolve versions
         id: versions
         run: |
-          new_tag="${{ github.event.release.tag_name }}"
-          new="${new_tag#v}"
-          old="$(yq '.images[] | select(.name == "ghcr.io/gaucho-racing/workbench-server") | .newTag' "infra/$KUSTOMIZATION")"
-          echo "new_tag=$new_tag" >> "$GITHUB_OUTPUT"
-          echo "new=$new" >> "$GITHUB_OUTPUT"
-          echo "old=$old" >> "$GITHUB_OUTPUT"
+          NEW_TAG="${{ github.event.release.tag_name }}"
+          NEW="${NEW_TAG#v}"
+          OLD="$(yq '.images[] | select(.name == "ghcr.io/gaucho-racing/workbench-server") | .newTag' "$KUSTOMIZATION")"
+          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          echo "old=$OLD" >> "$GITHUB_OUTPUT"
           echo "short_sha=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
-          if [ "$new" = "$old" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+          if [ "$NEW" = "$OLD" ]; then
+            echo "infra already at $NEW; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Bump image tags
         if: steps.versions.outputs.skip == 'false'
         env:
@@ -52,9 +61,10 @@ jobs:
             $0 ~ "- name: ghcr.io/gaucho-racing/workbench-(server|web)$" { inworkbench=1; print; next }
             inworkbench==1 && $1=="newTag:" { sub(/newTag:[[:space:]]*.*/, "newTag: " new); inworkbench=0 }
             { print }
-          ' "infra/$KUSTOMIZATION" > "infra/$KUSTOMIZATION.tmp"
-          mv "infra/$KUSTOMIZATION.tmp" "infra/$KUSTOMIZATION"
-          git -C infra diff -- "$KUSTOMIZATION"
+          ' "$KUSTOMIZATION" > "$KUSTOMIZATION.tmp" && mv "$KUSTOMIZATION.tmp" "$KUSTOMIZATION"
+          echo "--- diff ---"
+          git -C infra diff -- kubernetes/gr-foundry/manifests/workbench/kustomization.yaml
+
       - name: Build pull request body
         if: steps.versions.outputs.skip == 'false'
         env:
@@ -65,6 +75,7 @@ jobs:
             echo "- Bump \`workbench-web\` to \`${NEW_TAG#v}\`"
             echo "- Release: https://github.com/${{ github.repository }}/releases/tag/$NEW_TAG"
           } > "$RUNNER_TEMP/pr-body.txt"
+
       - name: Create pull request
         if: steps.versions.outputs.skip == 'false'
         working-directory: infra
@@ -75,18 +86,25 @@ jobs:
           SHORT_SHA: ${{ steps.versions.outputs.short_sha }}
           RELEASE_AUTHOR: ${{ github.event.release.author.login }}
         run: |
-          branch="bot/bump-workbench-${NEW}"
+          BRANCH="bot/bump-workbench-${NEW}"
           git config user.name "GR Admin"
           git config user.email "team@gauchoracing.com"
-          git switch -C "$branch"
+          git switch -C "$BRANCH"
           git commit -am "Deploy: workbench to ${NEW_TAG} (${SHORT_SHA})"
-          git push -f -u origin "$branch"
-          pr="$(gh pr list --repo "$INFRA_REPO" --head "$branch" --state open --json number -q '.[0].number')"
-          if [ -z "$pr" ]; then
-            gh pr create --repo "$INFRA_REPO" --base main --head "$branch" --title "Deploy: workbench to ${NEW_TAG} (${SHORT_SHA})" --body-file "$RUNNER_TEMP/pr-body.txt"
-            pr="$(gh pr list --repo "$INFRA_REPO" --head "$branch" --state open --json number -q '.[0].number')"
+          git push -f -u origin "$BRANCH"
+          PR="$(gh pr list --repo "$INFRA_REPO" --head "$BRANCH" --state open --json number -q '.[0].number')"
+          if [ -n "$PR" ]; then
+            echo "PR #$PR already open for $BRANCH; pushed the updated branch."
+          else
+            gh pr create \
+              --repo "$INFRA_REPO" \
+              --base main \
+              --head "$BRANCH" \
+              --title "Deploy: workbench to ${NEW_TAG} (${SHORT_SHA})" \
+              --body-file "$RUNNER_TEMP/pr-body.txt"
+            PR="$(gh pr list --repo "$INFRA_REPO" --head "$BRANCH" --state open --json number -q '.[0].number')"
           fi
-          if [ -n "$pr" ] && [ -n "$RELEASE_AUTHOR" ]; then
-            gh pr edit "$pr" --repo "$INFRA_REPO" --add-reviewer "$RELEASE_AUTHOR" || true
+          if [ -n "$PR" ] && [ -n "$RELEASE_AUTHOR" ]; then
+            gh pr edit "$PR" --repo "$INFRA_REPO" --add-reviewer "$RELEASE_AUTHOR" \
+              || echo "Could not request review from @$RELEASE_AUTHOR (they may be the PR author)."
           fi
-

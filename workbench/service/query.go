@@ -10,6 +10,7 @@ import (
 	"github.com/gaucho-racing/workbench/workbench/config"
 	"github.com/gaucho-racing/workbench/workbench/database"
 	"github.com/gaucho-racing/workbench/workbench/model"
+	"github.com/gaucho-racing/workbench/workbench/pkg/logger"
 )
 
 func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement string, actorEntityID string) (model.QueryResult, error) {
@@ -126,10 +127,12 @@ func finishQueryRun(ctx context.Context, id string, status string, commandTag st
 	}
 	updateContext, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	database.Pool.Exec(updateContext, `
+	if _, err := database.Pool.Exec(updateContext, `
 		UPDATE query_run
 		SET status = $2, command_tag = $3, row_count = $4, duration_ms = $5, error_message = $6
-		WHERE id = $1`, id, status, commandTag, rowCount, duration.Milliseconds(), errorMessage)
+		WHERE id = $1`, id, status, commandTag, rowCount, duration.Milliseconds(), errorMessage); err != nil {
+		logger.SugarLogger.Errorf("Failed to finalize query run %s: %v", id, err)
+	}
 }
 
 func formatValues(values []interface{}) []interface{} {

@@ -107,7 +107,7 @@ func authChecker() gin.HandlerFunc {
 
 func requireAuthenticatedUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if getRequestToken(c) == "" || getRequestTokenUserID(c) == "" || getRequestTokenAudience(c) != config.SentinelClientID {
+		if getRequestToken(c) == "" || getRequestTokenUserID(c) == "" || !requestTokenHasAudience(c, config.SentinelClientID) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "a Workbench user session is required"})
 			return
 		}
@@ -150,6 +150,18 @@ func getRequestTokenUserID(c *gin.Context) string {
 func getRequestTokenAudience(c *gin.Context) string {
 	value, _ := c.Get("Auth-Audience")
 	return contextString(value)
+}
+
+func requestTokenHasAudience(c *gin.Context, expected string) bool {
+	if expected == "" {
+		return false
+	}
+	for _, audience := range claimStringSlice(getRequestTokenClaims(c), "aud") {
+		if audience == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func contextString(value interface{}) string {

@@ -7,6 +7,9 @@ import { clearSession, saveSession } from "@/lib/auth"
 
 const sentinelURL = import.meta.env.VITE_SENTINEL_URL ?? "https://sso.gauchoracing.com"
 const sentinelClientID = import.meta.env.VITE_SENTINEL_CLIENT_ID ?? ""
+const oauthConfigurationError = sentinelClientID
+  ? ""
+  : "Workbench OAuth is not configured. Set VITE_SENTINEL_CLIENT_ID before building the web application."
 
 type TokenResponse = {
   access_token: string
@@ -20,7 +23,9 @@ export default function LoginPage() {
   const [searchParams] = useSearchParams()
   const exchanged = useRef(false)
   const redirected = useRef(false)
-  const [error, setError] = useState(searchParams.has("error") ? "Sentinel sign-on was not completed." : "")
+  const [error, setError] = useState(
+    searchParams.has("error") ? "Sentinel sign-on was not completed." : oauthConfigurationError,
+  )
   const source = (location.state as { from?: { pathname: string } } | null)?.from?.pathname ?? "/"
 
   useEffect(() => {
@@ -28,6 +33,9 @@ export default function LoginPage() {
     const code = searchParams.get("code")
     if (!code) {
       if (searchParams.has("error")) {
+        return
+      }
+      if (!sentinelClientID) {
         return
       }
       if (redirected.current) return

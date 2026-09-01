@@ -67,21 +67,32 @@ func GetTarget(ctx context.Context, id string) (model.DatabaseTarget, error) {
 }
 
 func CreateTarget(ctx context.Context, input CreateTargetInput, entityID string) (model.DatabaseTarget, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	input.Environment = strings.TrimSpace(input.Environment)
+	input.Host = strings.TrimSpace(input.Host)
+	input.DatabaseName = strings.TrimSpace(input.DatabaseName)
+	input.Username = strings.TrimSpace(input.Username)
+	if input.Name == "" || input.Environment == "" || input.Host == "" || input.DatabaseName == "" || input.Username == "" {
+		return model.DatabaseTarget{}, fmt.Errorf("name, environment, host, database_name, and username cannot be blank")
+	}
 	encryptedPassword, err := encryptSecret(input.Password)
 	if err != nil {
 		return model.DatabaseTarget{}, err
 	}
 	target := model.DatabaseTarget{
 		ID:                ulid.Make().Prefixed("db"),
-		Name:              strings.TrimSpace(input.Name),
-		Environment:       strings.ToUpper(strings.TrimSpace(input.Environment)),
-		Host:              strings.TrimSpace(input.Host),
+		Name:              input.Name,
+		Environment:       strings.ToUpper(input.Environment),
+		Host:              input.Host,
 		Port:              input.Port,
-		DatabaseName:      strings.TrimSpace(input.DatabaseName),
-		Username:          strings.TrimSpace(input.Username),
+		DatabaseName:      input.DatabaseName,
+		Username:          input.Username,
 		EncryptedPassword: encryptedPassword,
 		SSLMode:           input.SSLMode,
 		CreatedByEntityID: entityID,
+	}
+	if err := TestTarget(ctx, target); err != nil {
+		return model.DatabaseTarget{}, fmt.Errorf("connect to target: %w", err)
 	}
 	err = database.Pool.QueryRow(ctx, `
 		INSERT INTO database_target (
@@ -94,10 +105,6 @@ func CreateTarget(ctx context.Context, input CreateTargetInput, entityID string)
 	).Scan(&target.CreatedAt, &target.UpdatedAt)
 	if err != nil {
 		return model.DatabaseTarget{}, err
-	}
-	if err := TestTarget(ctx, target); err != nil {
-		database.Pool.Exec(ctx, "DELETE FROM database_target WHERE id = $1", target.ID)
-		return model.DatabaseTarget{}, fmt.Errorf("connect to target: %w", err)
 	}
 	target.EncryptedPassword = nil
 	return target, nil

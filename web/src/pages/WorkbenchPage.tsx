@@ -762,11 +762,11 @@ export default function WorkbenchPage() {
                 onClick={() => void execute()}
               >
                 <Play className="fill-current" /> Run
-                <kbd className="ml-1 hidden rounded bg-black/20 px-1 font-mono text-[10px] sm:inline">⌘↵</kbd>
+                <kbd className="ml-1 hidden rounded border border-white/20 bg-black/25 px-1.5 py-0.5 font-mono text-[10px] leading-none font-medium tracking-normal text-white/90 shadow-inner sm:inline">⌘ Enter</kbd>
               </Button>
               <Button variant="secondary" size="sm" disabled={!selectedTarget || !statement.trim()} onClick={() => void executeAll()}>
                 <Play /> Run from here
-                <kbd className="ml-1 hidden rounded bg-black/20 px-1 font-mono text-[10px] xl:inline">⇧⌘↵</kbd>
+                <kbd className="ml-1 hidden rounded border border-white/10 bg-white/[0.06] px-1.5 py-0.5 font-mono text-[10px] leading-none font-medium tracking-normal text-foreground/75 shadow-inner xl:inline">⇧⌘ Enter</kbd>
               </Button>
             </>
           )}

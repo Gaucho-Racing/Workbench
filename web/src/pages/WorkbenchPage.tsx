@@ -10,6 +10,7 @@ import {
   Columns3,
   Database,
   DatabaseZap,
+  Download,
   GitFork,
   LogOut,
   Menu,
@@ -23,6 +24,7 @@ import {
   Server,
   Table2,
   Trash2,
+  Upload,
   X,
 } from "lucide-react"
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -59,6 +61,9 @@ const SchemaDiagram = lazy(() =>
 const ConnectionDialog = lazy(() =>
   import("@/components/ConnectionDialog").then((module) => ({ default: module.ConnectionDialog })),
 )
+const DataImportDialog = lazy(() =>
+  import("@/components/DataImportDialog").then((module) => ({ default: module.DataImportDialog })),
+)
 
 export default function WorkbenchPage() {
   const queryClient = useQueryClient()
@@ -72,6 +77,7 @@ export default function WorkbenchPage() {
   const [running, setRunning] = useState(false)
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false)
   const [connectionTarget, setConnectionTarget] = useState<DatabaseTarget | null>(null)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [bottomTab, setBottomTab] = useState<"results" | "history">("results")
   const [bottomPaneCollapsed, setBottomPaneCollapsed] = useState(false)
@@ -81,6 +87,7 @@ export default function WorkbenchPage() {
   const [workspaceView, setWorkspaceView] = useState<"query" | "diagram">("query")
   const [targetPendingDeletion, setTargetPendingDeletion] = useState<DatabaseTarget | null>(null)
   const [deletingTarget, setDeletingTarget] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const abortController = useRef<AbortController | null>(null)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const workspaceRef = useRef<HTMLElement | null>(null)
@@ -225,6 +232,35 @@ export default function WorkbenchPage() {
     setConnectionDialogOpen(true)
   }
 
+  async function exportCurrentStatement() {
+    if (!activeTargetID || !activeDatabaseName || exporting) return
+    const executableStatement = statementForEditor(editorRef.current, statement)
+    if (!executableStatement) return
+    setExporting(true)
+    try {
+      const response = await api.post<Blob>(
+        "/exports",
+        { target_id: activeTargetID, database_name: activeDatabaseName, statement: executableStatement },
+        { responseType: "blob" },
+      )
+      const disposition = String(response.headers["content-disposition"] ?? "")
+      const fileName = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? `${activeDatabaseName}-export.csv`
+      const url = URL.createObjectURL(response.data)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = fileName
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      toast.success("CSV export ready")
+    } catch (error) {
+      toast.error(await exportErrorMessage(error))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   function selectBottomTab(tab: "results" | "history") {
     setBottomTab(tab)
     setBottomPaneCollapsed(false)
@@ -352,10 +388,16 @@ export default function WorkbenchPage() {
               <span className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Explorer</span>
               <div className="ml-auto flex gap-0.5">
                 {isAdmin && (
-                  <Button variant="ghost" size="icon-sm" onClick={openNewConnection}>
-                    <Plus />
-                    <span className="sr-only">New connection</span>
-                  </Button>
+                  <>
+                    <Button variant="ghost" size="icon-sm" onClick={openNewConnection}>
+                      <Plus />
+                      <span className="sr-only">New connection</span>
+                    </Button>
+                    <Button variant="ghost" size="icon-sm" disabled={!selectedTarget || !activeDatabaseName} onClick={() => setImportDialogOpen(true)}>
+                      <Upload />
+                      <span className="sr-only">Import CSV</span>
+                    </Button>
+                  </>
                 )}
                 <Button variant="ghost" size="icon-sm" onClick={() => void Promise.all([databasesQuery.refetch(), catalogQuery.refetch()])} disabled={!activeTargetID}>
                   <RefreshCw className={cn((databasesQuery.isFetching || catalogQuery.isFetching) && "animate-spin")} />
@@ -423,22 +465,20 @@ export default function WorkbenchPage() {
           )}
           style={{ gridTemplateRows: `minmax(0, 1fr) ${bottomPaneCollapsed ? "36px" : `${bottomPaneRatio * 100}%`}` }}
         >
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-hidden={sidebarOpen}
-            tabIndex={sidebarOpen ? -1 : 0}
-            className={cn(
-              "absolute top-2 left-2 z-10 transition-[transform,opacity] duration-200 ease-out motion-reduce:transition-none",
-              sidebarOpen ? "pointer-events-none -translate-x-2 opacity-0" : "translate-x-0 opacity-100 delay-150",
-            )}
-            onClick={() => setSidebarOpen(true)}
-          >
-            <PanelLeftOpen />
-            <span className="sr-only">Show explorer</span>
-          </Button>
           <section className="min-h-0 border-b bg-[#0d0c11] pt-1">
             <div className="flex h-8 items-center border-b px-3 text-xs">
+              <div
+                aria-hidden={sidebarOpen}
+                className={cn(
+                  "grid h-full shrink-0 place-items-center overflow-hidden transition-[width,opacity,margin] duration-200 ease-out motion-reduce:transition-none",
+                  sidebarOpen ? "pointer-events-none w-0 opacity-0" : "mr-1 w-7 opacity-100 delay-150",
+                )}
+              >
+                <Button variant="ghost" size="icon-sm" tabIndex={sidebarOpen ? -1 : 0} onClick={() => setSidebarOpen(true)}>
+                  <PanelLeftOpen />
+                  <span className="sr-only">Show explorer</span>
+                </Button>
+              </div>
               <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 font-mono text-[11px]", workspaceView === "query" ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("query")}>query.sql</button>
               <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 text-[11px]", workspaceView === "diagram" ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("diagram")}><GitFork className="size-3" /> Diagram</button>
               <span className="ml-2 text-muted-foreground">{activeDatabaseName ?? "disconnected"}</span>
@@ -504,6 +544,17 @@ export default function WorkbenchPage() {
               </div>
               <Button
                 variant="ghost"
+                size="sm"
+                className="shrink-0"
+                disabled={!selectedTarget || !activeDatabaseName || workspaceView !== "query" || exporting}
+                onClick={() => void exportCurrentStatement()}
+              >
+                <Download />
+                <span className="hidden sm:inline">{exporting ? "Exporting…" : "CSV"}</span>
+                <span className="sr-only sm:hidden">Export current query as CSV</span>
+              </Button>
+              <Button
+                variant="ghost"
                 size="icon-sm"
                 className="shrink-0"
                 onClick={() => setBottomPaneCollapsed((collapsed) => !collapsed)}
@@ -550,6 +601,19 @@ export default function WorkbenchPage() {
               setSelectedTargetID(target.id)
               toast.success(connectionTarget ? `${target.name} updated` : `${target.name} connected`)
             }}
+          />
+        </Suspense>
+      )}
+      {importDialogOpen && selectedTarget && activeDatabaseName && (
+        <Suspense fallback={null}>
+          <DataImportDialog
+            key={`${selectedTarget.id}:${activeDatabaseName}`}
+            open
+            onOpenChange={setImportDialogOpen}
+            target={selectedTarget}
+            databaseName={activeDatabaseName}
+            tables={catalogQuery.data?.tables ?? []}
+            onImported={(rowCount, table) => toast.success(`${rowCount.toLocaleString()} rows imported into ${table.schema}.${table.name}`)}
           />
         </Suspense>
       )}
@@ -771,4 +835,17 @@ function SidebarMessage({ children }: { children: React.ReactNode }) {
 
 function CenteredMessage({ children }: { children: React.ReactNode }) {
   return <div className="grid h-full place-items-center text-xs text-muted-foreground">{children}</div>
+}
+
+async function exportErrorMessage(error: unknown) {
+  const data = (error as { response?: { data?: unknown } })?.response?.data
+  if (data instanceof Blob) {
+    try {
+      const parsed = JSON.parse(await data.text()) as { error?: string }
+      if (parsed.error) return parsed.error
+    } catch {
+      return "CSV export failed"
+    }
+  }
+  return getErrorMessage(error)
 }

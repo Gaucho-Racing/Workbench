@@ -252,7 +252,7 @@ export default function WorkbenchPage() {
 
       <div className={cn("grid min-h-0", sidebarOpen ? "grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)]")}>
         {sidebarOpen && (
-          <aside className="absolute inset-y-[46px] left-0 z-20 flex w-[280px] flex-col border-r bg-[#0f0e13] lg:static lg:inset-auto lg:z-auto">
+          <aside className="fixed top-[46px] bottom-0 left-0 z-20 flex min-h-0 w-[280px] flex-col overflow-hidden border-r bg-[#0f0e13] shadow-2xl shadow-black/40 lg:static lg:z-auto lg:shadow-none">
             <div className="flex h-10 items-center border-b px-2.5">
               <span className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Explorer</span>
               <div className="ml-auto flex gap-0.5">
@@ -280,7 +280,7 @@ export default function WorkbenchPage() {
                 <Input className="h-7 pl-7 text-xs" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter database objects" />
               </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto py-1.5">
+            <div className="min-h-0 flex-1 touch-pan-y overflow-x-hidden overflow-y-auto overscroll-contain py-1.5 [scrollbar-gutter:stable]">
               {targetsQuery.isLoading && <SidebarMessage>Loading connections…</SidebarMessage>}
               {!targetsQuery.isLoading && targets.length === 0 && (
                 <div className="px-4 py-10 text-center">
@@ -456,7 +456,7 @@ function TargetTree({
   return (
     <div>
       <div
-        className={cn("group flex h-8 items-center gap-1.5 border-l-2 px-2 text-xs", selected ? "border-gr-pink bg-gr-purple/10 text-foreground" : "border-transparent text-muted-foreground hover:bg-muted/50")}
+        className={cn("group flex h-8 items-center gap-1.5 border-l-2 px-2 text-xs", selected ? "sticky top-0 z-30 border-gr-pink bg-[#181122]/95 text-foreground shadow-sm backdrop-blur-md" : "border-transparent text-muted-foreground hover:bg-muted/50")}
       >
         <button className="grid size-5 place-items-center" onClick={() => { setExpanded(!expanded); if (!selected) onSelect() }}>
           {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
@@ -479,7 +479,7 @@ function TargetTree({
             return (
               <div key={database.name}>
                 <button
-                  className={cn("flex h-8 w-full items-center gap-1.5 pr-2 pl-6 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground", active && "text-foreground")}
+                  className={cn("flex h-8 w-full items-center gap-1.5 pr-2 pl-6 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground", active && "sticky top-8 z-20 bg-[#121017]/95 text-foreground shadow-sm backdrop-blur-md")}
                   onClick={() => onSelectDatabase(database.name)}
                 >
                   {active ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
@@ -509,7 +509,7 @@ function SchemaTree({ schema, tables, onOpenTable }: { schema: string; tables: C
   const [expanded, setExpanded] = useState(true)
   return (
     <div>
-      <button className="flex h-7 w-full items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-foreground" onClick={() => setExpanded(!expanded)}>
+      <button className="sticky top-16 z-10 flex h-7 w-full items-center gap-1.5 bg-[#0f0e13]/95 px-1 text-xs text-muted-foreground shadow-sm backdrop-blur-md hover:text-foreground" onClick={() => setExpanded(!expanded)}>
         {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
         <span className="font-mono text-[11px]">{schema}</span>
       </button>

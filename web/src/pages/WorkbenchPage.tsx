@@ -979,6 +979,13 @@ function SessionModeControl({
   attentionKey: number
   onModeChange: (mode: SessionMode) => void
 }) {
+  const helperMessage = error
+    || (!isAdmin
+      ? "WorkbenchAdmins membership is required for writes."
+      : mode === "write"
+        ? "Writes and schema changes are enabled for this session."
+        : "")
+
   return (
     <div className="shrink-0 border-t bg-[#0d0c11] p-2">
       <div
@@ -1020,7 +1027,7 @@ function SessionModeControl({
           <span
             aria-hidden="true"
             className={cn(
-              "pointer-events-none absolute top-0.5 bottom-0.5 left-0.5 z-0 w-[calc(50%_-_0.125rem)] rounded-[5px] transition-[transform,background-color,box-shadow] duration-500 [transition-timing-function:cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+              "pointer-events-none absolute top-0.5 bottom-0.5 left-0.5 z-0 w-[calc(50%_-_0.125rem)] rounded-[5px] transition-[translate,background-color,box-shadow] duration-500 [transition-timing-function:cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
               mode === "write"
                 ? "translate-x-full bg-gr-pink/15 shadow-[inset_0_0_0_1px_rgba(225,5,163,0.18),0_0_14px_rgba(225,5,163,0.09)]"
                 : "translate-x-0 bg-gr-purple/15 shadow-[inset_0_0_0_1px_rgba(132,18,252,0.18),0_0_14px_rgba(132,18,252,0.08)]",
@@ -1052,13 +1059,25 @@ function SessionModeControl({
             <PenLine className="size-3" /> Write
           </button>
         </div>
-        {error ? (
-          <p role="alert" className="mt-2 px-0.5 text-[10px] leading-relaxed text-destructive">{error}</p>
-        ) : !isAdmin ? (
-          <p className="mt-2 px-0.5 text-[10px] leading-relaxed text-muted-foreground">WorkbenchAdmins membership is required for writes.</p>
-        ) : mode === "write" ? (
-          <p className="mt-2 px-0.5 text-[10px] leading-relaxed text-muted-foreground">Writes and schema changes are enabled for this session.</p>
-        ) : null}
+        <div
+          className={cn(
+            "grid transition-[grid-template-rows,opacity,margin-top] duration-400 [transition-timing-function:cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+            helperMessage ? "mt-2 grid-rows-[1fr] opacity-100" : "mt-0 grid-rows-[0fr] opacity-0",
+          )}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <p
+              role={error ? "alert" : undefined}
+              aria-hidden={!helperMessage}
+              className={cn(
+                "px-0.5 text-[10px] leading-relaxed",
+                error ? "text-destructive" : "text-muted-foreground",
+              )}
+            >
+              {helperMessage}
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   )

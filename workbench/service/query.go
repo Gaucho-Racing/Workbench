@@ -50,6 +50,7 @@ func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement st
 
 	resultRows := make([][]interface{}, 0, min(config.QueryMaxRowsLimit, 256))
 	truncated := false
+	resultBytes := 0
 	for rows.Next() {
 		if len(resultRows) >= config.QueryMaxRowsLimit {
 			truncated = true
@@ -60,7 +61,14 @@ func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement st
 			finishQueryRun(context.Background(), run.ID, "FAILED", "", int64(len(resultRows)), time.Since(startedAt), err)
 			return model.QueryResult{RunID: run.ID}, err
 		}
-		resultRows = append(resultRows, formatValues(values))
+		formattedValues := formatValues(values)
+		rowBytes := estimateRowBytes(formattedValues)
+		if resultBytes+rowBytes > config.QueryMaxBytesLimit {
+			truncated = true
+			break
+		}
+		resultBytes += rowBytes
+		resultRows = append(resultRows, formattedValues)
 	}
 	if err := rows.Err(); err != nil {
 		finishQueryRun(context.Background(), run.ID, "FAILED", "", int64(len(resultRows)), time.Since(startedAt), err)
@@ -134,11 +142,26 @@ func formatValues(values []interface{}) []interface{} {
 			formatted[index] = "\\x" + hex.EncodeToString(typed)
 		case time.Time:
 			formatted[index] = typed.Format(time.RFC3339Nano)
-		case string, bool, int16, int32, int64, float32, float64:
+		case string, bool:
 			formatted[index] = typed
 		default:
 			formatted[index] = fmt.Sprint(typed)
 		}
 	}
 	return formatted
+}
+
+func estimateRowBytes(values []interface{}) int {
+	size := 2
+	for _, value := range values {
+		switch typed := value.(type) {
+		case nil:
+			size += 5
+		case string:
+			size += len(typed) + 3
+		default:
+			size += 8
+		}
+	}
+	return size
 }

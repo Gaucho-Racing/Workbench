@@ -18,6 +18,7 @@ func Verify() {
 	defaultString(&DatabaseName, "workbench", "DATABASE_NAME")
 	defaultString(&QueryTimeout, "30s", "QUERY_TIMEOUT")
 	defaultString(&QueryMaxRows, "5000", "QUERY_MAX_ROWS")
+	defaultString(&QueryMaxBytes, "26214400", "QUERY_MAX_BYTES")
 
 	if SentinelURL == "" {
 		logger.SugarLogger.Fatal("SENTINEL_URL is required")
@@ -39,6 +40,10 @@ func Verify() {
 	QueryMaxRowsLimit, err = strconv.Atoi(QueryMaxRows)
 	if err != nil || QueryMaxRowsLimit <= 0 {
 		logger.SugarLogger.Fatal("QUERY_MAX_ROWS must be a positive integer")
+	}
+	QueryMaxBytesLimit, err = strconv.Atoi(QueryMaxBytes)
+	if err != nil || QueryMaxBytesLimit <= 0 {
+		logger.SugarLogger.Fatal("QUERY_MAX_BYTES must be a positive integer")
 	}
 }
 

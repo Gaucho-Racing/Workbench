@@ -30,6 +30,7 @@ func ListTargets(ctx context.Context) ([]model.DatabaseTarget, error) {
 		SELECT id, name, environment, host, port, database_name, username, ssl_mode,
 		       created_by_entity_id, created_at, updated_at
 		FROM database_target
+		WHERE deleted_at IS NULL
 		ORDER BY lower(name)`)
 	if err != nil {
 		return nil, err
@@ -54,7 +55,7 @@ func GetTarget(ctx context.Context, id string) (model.DatabaseTarget, error) {
 	err := database.Pool.QueryRow(ctx, `
 		SELECT id, name, environment, host, port, database_name, username, encrypted_password,
 		       ssl_mode, created_by_entity_id, created_at, updated_at
-		FROM database_target WHERE id = $1`, id).Scan(
+		FROM database_target WHERE id = $1 AND deleted_at IS NULL`, id).Scan(
 		&target.ID, &target.Name, &target.Environment, &target.Host, &target.Port,
 		&target.DatabaseName, &target.Username, &target.EncryptedPassword, &target.SSLMode,
 		&target.CreatedByEntityID, &target.CreatedAt, &target.UpdatedAt,
@@ -103,7 +104,7 @@ func CreateTarget(ctx context.Context, input CreateTargetInput, entityID string)
 }
 
 func DeleteTarget(ctx context.Context, id string) error {
-	result, err := database.Pool.Exec(ctx, "DELETE FROM database_target WHERE id = $1", id)
+	result, err := database.Pool.Exec(ctx, "UPDATE database_target SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL", id)
 	if err != nil {
 		return err
 	}

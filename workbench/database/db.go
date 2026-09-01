@@ -2,7 +2,8 @@ package database
 
 import (
 	"context"
-	"fmt"
+	"net"
+	"net/url"
 	"time"
 
 	"github.com/gaucho-racing/workbench/workbench/config"
@@ -43,12 +44,15 @@ func Close() {
 }
 
 func connectionString() string {
-	return fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable application_name=workbench",
-		config.DatabaseHost,
-		config.DatabasePort,
-		config.DatabaseUser,
-		config.DatabasePassword,
-		config.DatabaseName,
-	)
+	connectionURL := url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(config.DatabaseUser, config.DatabasePassword),
+		Host:   net.JoinHostPort(config.DatabaseHost, config.DatabasePort),
+		Path:   config.DatabaseName,
+	}
+	query := connectionURL.Query()
+	query.Set("sslmode", "disable")
+	query.Set("application_name", "workbench")
+	connectionURL.RawQuery = query.Encode()
+	return connectionURL.String()
 }

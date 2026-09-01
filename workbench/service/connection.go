@@ -105,6 +105,7 @@ func newTargetPool(ctx context.Context, target model.DatabaseTarget) (*pgxpool.P
 	poolConfig.MaxConns = 4
 	poolConfig.MaxConnIdleTime = 5 * time.Minute
 	poolConfig.ConnConfig.RuntimeParams["statement_timeout"] = strconv.FormatInt(config.QueryTimeoutDuration.Milliseconds(), 10)
+	poolConfig.ConnConfig.RuntimeParams["lock_timeout"] = "5000"
 	poolConfig.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = "15000"
 	return pgxpool.NewWithConfig(ctx, poolConfig)
 }

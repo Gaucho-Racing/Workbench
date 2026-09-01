@@ -29,6 +29,8 @@ var QueryTimeout = os.Getenv("QUERY_TIMEOUT")
 var QueryTimeoutDuration time.Duration
 var QueryMaxRows = os.Getenv("QUERY_MAX_ROWS")
 var QueryMaxRowsLimit int
+var QueryMaxBytes = os.Getenv("QUERY_MAX_BYTES")
+var QueryMaxBytesLimit int
 
 func IsProduction() bool {
 	return Env == "PROD"

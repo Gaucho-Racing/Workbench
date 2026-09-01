@@ -29,6 +29,21 @@ export type CatalogTable = {
   columns: CatalogColumn[]
 }
 
+export type CatalogForeignKey = {
+  name: string
+  source_schema: string
+  source_table: string
+  source_column: string
+  target_schema: string
+  target_table: string
+  target_column: string
+}
+
+export type Catalog = {
+  tables: CatalogTable[]
+  foreign_keys: CatalogForeignKey[]
+}
+
 export type QueryColumn = {
   name: string
   data_type_oid: number
@@ -67,7 +82,7 @@ export function useTargets() {
 export function useCatalog(targetID: string | null) {
   return useQuery({
     queryKey: ["catalog", targetID],
-    queryFn: async () => (await api.get<CatalogTable[]>(`/targets/${targetID}/catalog`)).data,
+    queryFn: async () => (await api.get<Catalog>(`/targets/${targetID}/catalog`)).data,
     enabled: !!targetID,
     staleTime: 60_000,
   })
@@ -79,4 +94,3 @@ export function useQueryHistory() {
     queryFn: async () => (await api.get<QueryRun[]>("/queries")).data,
   })
 }
-

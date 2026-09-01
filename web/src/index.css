@@ -4,6 +4,7 @@
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 @import "@fontsource-variable/inter";
+@import "@xyflow/react/dist/style.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -88,4 +89,3 @@
   scrollbar-color: rgb(255 255 255 / 15%) transparent;
   scrollbar-width: thin;
 }
-

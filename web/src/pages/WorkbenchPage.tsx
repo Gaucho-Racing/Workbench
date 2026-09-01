@@ -9,6 +9,7 @@ import {
   Columns3,
   Database,
   DatabaseZap,
+  GitFork,
   LogOut,
   Menu,
   PanelLeftClose,
@@ -21,7 +22,7 @@ import {
   Trash2,
   X,
 } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { ConnectionDialog } from "@/components/ConnectionDialog"
@@ -45,6 +46,10 @@ const initialStatement = `select
   current_user as user,
   now() as connected_at;`
 
+const SchemaDiagram = lazy(() =>
+  import("@/components/SchemaDiagram").then((module) => ({ default: module.SchemaDiagram })),
+)
+
 export default function WorkbenchPage() {
   const queryClient = useQueryClient()
   const { user, logout } = useAuth()
@@ -58,6 +63,7 @@ export default function WorkbenchPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [bottomTab, setBottomTab] = useState<"results" | "history">("results")
   const [filter, setFilter] = useState("")
+  const [workspaceView, setWorkspaceView] = useState<"query" | "diagram">("query")
   const abortController = useRef<AbortController | null>(null)
 
   const targets = useMemo(() => targetsQuery.data ?? [], [targetsQuery.data])
@@ -100,7 +106,7 @@ export default function WorkbenchPage() {
   }, [execute])
 
   useEffect(() => {
-    catalogRef.current = catalogQuery.data ?? []
+    catalogRef.current = catalogQuery.data?.tables ?? []
   }, [catalogQuery.data])
 
   useEffect(() => () => completionDisposable.current?.dispose(), [])
@@ -253,7 +259,7 @@ export default function WorkbenchPage() {
                   key={target.id}
                   target={target}
                   selected={target.id === activeTargetID}
-                  catalog={target.id === activeTargetID ? catalogQuery.data ?? [] : []}
+                  catalog={target.id === activeTargetID ? catalogQuery.data?.tables ?? [] : []}
                   filter={filter}
                   onSelect={() => setSelectedTargetID(target.id)}
                   onOpenTable={openTable}
@@ -273,29 +279,38 @@ export default function WorkbenchPage() {
           )}
           <section className="min-h-0 border-b bg-[#0d0c11] pt-1">
             <div className="flex h-8 items-center border-b px-3 text-xs">
-              <span className="rounded-t border-x border-t border-border bg-[#15131a] px-3 py-1.5 font-mono text-[11px] text-foreground">query.sql</span>
+              <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 font-mono text-[11px]", workspaceView === "query" ? "border-primary text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("query")}>query.sql</button>
+              <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 text-[11px]", workspaceView === "diagram" ? "border-primary text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("diagram")}><GitFork className="size-3" /> Diagram</button>
               <span className="ml-2 text-muted-foreground">{selectedTarget?.database_name ?? "disconnected"}</span>
             </div>
             <div className="h-[calc(100%-2rem)]">
-              <Editor
-                language="pgsql"
-                theme="vs-dark"
-                value={statement}
-                onChange={(value) => setStatement(value ?? "")}
-                onMount={mountEditor}
-                options={{
-                  automaticLayout: true,
-                  fontFamily: "Geist Mono Variable, SFMono-Regular, monospace",
-                  fontSize: 13,
-                  lineHeight: 21,
-                  minimap: { enabled: false },
-                  padding: { top: 14 },
-                  renderLineHighlight: "gutter",
-                  scrollBeyondLastLine: false,
-                  smoothScrolling: true,
-                  suggest: { showWords: false },
-                }}
-              />
+              {workspaceView === "query" ? (
+                <Editor
+                  language="pgsql"
+                  theme="vs-dark"
+                  value={statement}
+                  onChange={(value) => setStatement(value ?? "")}
+                  onMount={mountEditor}
+                  options={{
+                    automaticLayout: true,
+                    fontFamily: "Geist Mono Variable, SFMono-Regular, monospace",
+                    fontSize: 13,
+                    lineHeight: 21,
+                    minimap: { enabled: false },
+                    padding: { top: 14 },
+                    renderLineHighlight: "gutter",
+                    scrollBeyondLastLine: false,
+                    smoothScrolling: true,
+                    suggest: { showWords: false },
+                  }}
+                />
+              ) : catalogQuery.data ? (
+                <Suspense fallback={<CenteredMessage>Loading schema diagram…</CenteredMessage>}>
+                  <SchemaDiagram catalog={catalogQuery.data} />
+                </Suspense>
+              ) : (
+                <CenteredMessage>Load a connection to view its schema</CenteredMessage>
+              )}
             </div>
           </section>
 

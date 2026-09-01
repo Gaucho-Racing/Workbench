@@ -15,7 +15,7 @@ export function RequireAuth() {
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_34%_26%,rgba(132,18,252,0.22),transparent_35%),radial-gradient(circle_at_69%_68%,rgba(225,5,163,0.16),transparent_38%)]" />
         <div className="relative flex items-center gap-2 text-sm text-muted-foreground">
           <span className="size-2 animate-pulse rounded-full bg-gradient-to-r from-gr-purple to-gr-pink shadow-[0_0_18px_rgba(225,5,163,0.45)]" />
-          Opening Workbench
+          Connecting to Workbench...
         </div>
       </main>
     )

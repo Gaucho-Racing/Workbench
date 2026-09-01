@@ -1,11 +1,10 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/workbench-header-dark.svg" />
-  <source media="(prefers-color-scheme: light)" srcset="assets/workbench-header-light.svg" />
-  <img src="assets/workbench-header-light.svg" alt="Workbench" width="232" />
-</picture>
+# Workbench
+
+<img align="right" width="159px" src="assets/workbench.png" alt="workbench-logo">
 
 [![build](https://github.com/Gaucho-Racing/Workbench/actions/workflows/build.yml/badge.svg)](https://github.com/Gaucho-Racing/Workbench/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/release/gaucho-racing/workbench.svg?style=flat-square)](https://github.com/gaucho-racing/workbench/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Workbench is Gaucho Racing's in-house database management console.
 It provides a browser-based PostgreSQL workspace for exploring database servers, inspecting schemas and DDL, running queries, and moving data without requiring every team member to configure a desktop database client.

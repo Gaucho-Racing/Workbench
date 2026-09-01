@@ -93,6 +93,7 @@ func initializeRoutes(router *gin.Engine) {
 	admin.Use(requireWorkbenchAdmin())
 	admin.POST("/exports/preview", PreviewExport)
 	admin.POST("/exports", ExportQuery)
+	admin.POST("/exports/tables", ExportTables)
 	admin.POST("/targets", CreateTarget)
 	admin.PATCH("/targets/:id", UpdateTarget)
 	admin.DELETE("/targets/:id", DeleteTarget)

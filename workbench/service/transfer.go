@@ -1,6 +1,7 @@
 package service
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/csv"
@@ -90,6 +91,14 @@ const (
 type ExportOptions struct {
 	Format       ExportFormat
 	SQLTableName string
+	SchemaName   string
+	TableName    string
+	FileName     string
+}
+
+type ExportTable struct {
+	Schema string
+	Name   string
 }
 
 func ParseExportFormat(value string) (ExportFormat, error) {
@@ -195,7 +204,17 @@ func ExportQuery(ctx context.Context, target model.DatabaseTarget, statement str
 	if options.Format == ExportFormatSQL && strings.TrimSpace(options.SQLTableName) == "" {
 		return "", fmt.Errorf("SQL table name is required")
 	}
-	transferID, err := startDataTransferRun(ctx, target, actorEntityID, "EXPORT", "", "", "", statement, string(options.Format))
+	transferID, err := startDataTransferRun(
+		ctx,
+		target,
+		actorEntityID,
+		"EXPORT",
+		options.SchemaName,
+		options.TableName,
+		options.FileName,
+		statement,
+		string(options.Format),
+	)
 	if err != nil {
 		return "", err
 	}
@@ -268,6 +287,83 @@ func ExportQuery(ctx context.Context, target model.DatabaseTarget, statement str
 	}
 	finishDataTransferRun(transferID, rowCount, startedAt, err)
 	return transferID, err
+}
+
+func ExportTablesArchive(
+	ctx context.Context,
+	target model.DatabaseTarget,
+	tables []ExportTable,
+	actorEntityID string,
+	format ExportFormat,
+	timestamp time.Time,
+	destination io.Writer,
+) error {
+	if _, err := ParseExportFormat(string(format)); err != nil {
+		return err
+	}
+	if len(tables) == 0 {
+		return fmt.Errorf("at least one table is required")
+	}
+
+	archive := zip.NewWriter(destination)
+	timestampValue := timestamp.Format("20060102-150405")
+	for _, table := range tables {
+		sourceName := table.Schema + "-" + table.Name
+		fileName := fmt.Sprintf(
+			"%s-%s-%s-%s.%s",
+			safeTransferFilePart(target.Name),
+			safeTransferFilePart(target.DatabaseName),
+			safeTransferFilePart(sourceName),
+			timestampValue,
+			format.Extension(),
+		)
+		entry, err := archive.CreateHeader(&zip.FileHeader{
+			Name:     fileName,
+			Method:   zip.Deflate,
+			Modified: timestamp,
+		})
+		if err != nil {
+			_ = archive.Close()
+			return fmt.Errorf("create archive entry for %s.%s: %w", table.Schema, table.Name, err)
+		}
+		statement := fmt.Sprintf("SELECT * FROM %s", pgx.Identifier{table.Schema, table.Name}.Sanitize())
+		_, err = ExportQuery(
+			ctx,
+			target,
+			statement,
+			actorEntityID,
+			ExportOptions{
+				Format:       format,
+				SQLTableName: table.Schema + "_" + table.Name,
+				SchemaName:   table.Schema,
+				TableName:    table.Name,
+				FileName:     fileName,
+			},
+			entry,
+		)
+		if err != nil {
+			_ = archive.Close()
+			return fmt.Errorf("export %s.%s: %w", table.Schema, table.Name, err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		return fmt.Errorf("finish export archive: %w", err)
+	}
+	return nil
+}
+
+func safeTransferFilePart(value string) string {
+	value = strings.Map(func(character rune) rune {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' {
+			return character
+		}
+		return '-'
+	}, value)
+	value = strings.Trim(value, "-")
+	if value == "" {
+		return "table"
+	}
+	return value
 }
 
 type exportEncoder interface {

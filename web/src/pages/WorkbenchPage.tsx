@@ -36,7 +36,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerE
 import { toast } from "sonner"
 
 import { ConfirmationDialog } from "@/components/ConfirmationDialog"
-import type { ImportResult } from "@/components/DataImportDialog"
+import type { CompletedImport } from "@/components/DataImportDialog"
 import type { ExportFormat } from "@/components/ExportDialog"
 import { Button } from "@/components/ui/button"
 import {
@@ -97,6 +97,9 @@ const SchemaDiagram = lazy(() =>
 const ConnectionDialog = lazy(() =>
   import("@/components/ConnectionDialog").then((module) => ({ default: module.ConnectionDialog })),
 )
+const BulkExportDialog = lazy(() =>
+  import("@/components/BulkExportDialog").then((module) => ({ default: module.BulkExportDialog })),
+)
 const DataImportDialog = lazy(() =>
   import("@/components/DataImportDialog").then((module) => ({ default: module.DataImportDialog })),
 )
@@ -125,6 +128,7 @@ export default function WorkbenchPage() {
   const [running, setRunning] = useState(false)
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false)
   const [connectionTarget, setConnectionTarget] = useState<DatabaseTarget | null>(null)
+  const [bulkExportDialogOpen, setBulkExportDialogOpen] = useState(false)
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv")
@@ -650,6 +654,10 @@ export default function WorkbenchPage() {
                       <Plus />
                       <span className="sr-only">New connection</span>
                     </Button>
+                    <Button variant="ghost" size="icon-sm" disabled={!selectedTarget || !activeDatabaseName} onClick={() => setBulkExportDialogOpen(true)}>
+                      <Download />
+                      <span className="sr-only">Bulk export tables</span>
+                    </Button>
                     <Button variant="ghost" size="icon-sm" disabled={!selectedTarget || !activeDatabaseName} onClick={() => setImportDialogOpen(true)}>
                       <Upload />
                       <span className="sr-only">Import CSV</span>
@@ -705,6 +713,14 @@ export default function WorkbenchPage() {
                   filter={filter}
                   onSelect={() => setSelectedTargetID(target.id)}
                   onSelectDatabase={(databaseName) => selectDatabase(target.id, databaseName)}
+                  onBulkExportDatabase={(databaseName) => {
+                    selectDatabase(target.id, databaseName)
+                    setBulkExportDialogOpen(true)
+                  }}
+                  onImportDatabase={(databaseName) => {
+                    selectDatabase(target.id, databaseName)
+                    setImportDialogOpen(true)
+                  }}
                   onOpenTable={openTable}
                   onViewDDL={setDDLTable}
                   onExportTable={openTableExport}
@@ -913,14 +929,27 @@ export default function WorkbenchPage() {
             target={selectedTarget}
             databaseName={activeDatabaseName}
             tables={catalogQuery.data?.tables ?? []}
-            onImported={(importResult: ImportResult, table) => {
-              const destination = `${table.schema}.${table.name}`
-              if (importResult.error_count > 0) {
-                toast.warning(`${importResult.row_count.toLocaleString()} rows imported into ${destination} · ${importResult.error_count.toLocaleString()} skipped`)
-              } else {
-                toast.success(`${importResult.row_count.toLocaleString()} rows imported into ${destination}`)
-              }
+            onImported={(imports: CompletedImport[]) => {
+              const rowCount = imports.reduce((total, item) => total + item.result.row_count, 0)
+              const errorCount = imports.reduce((total, item) => total + item.result.error_count, 0)
+              const message = `${rowCount.toLocaleString()} rows imported across ${imports.length} table${imports.length === 1 ? "" : "s"}`
+              if (errorCount > 0) toast.warning(`${message} · ${errorCount.toLocaleString()} skipped`)
+              else toast.success(message)
             }}
+          />
+        </Suspense>
+      )}
+      {bulkExportDialogOpen && selectedTarget && activeDatabaseName && (
+        <Suspense fallback={null}>
+          <BulkExportDialog
+            key={`${selectedTarget.id}:${activeDatabaseName}`}
+            open
+            onOpenChange={setBulkExportDialogOpen}
+            target={selectedTarget}
+            databaseName={activeDatabaseName}
+            tables={catalogQuery.data?.tables ?? []}
+            format={exportFormat}
+            onFormatChange={setExportFormat}
           />
         </Suspense>
       )}
@@ -1093,6 +1122,8 @@ function TargetTree({
   filter,
   onSelect,
   onSelectDatabase,
+  onBulkExportDatabase,
+  onImportDatabase,
   onOpenTable,
   onViewDDL,
   onExportTable,
@@ -1113,6 +1144,8 @@ function TargetTree({
   filter: string
   onSelect: () => void
   onSelectDatabase: (databaseName: string) => void
+  onBulkExportDatabase: (databaseName: string) => void
+  onImportDatabase: (databaseName: string) => void
   onOpenTable: (table: CatalogTable) => void
   onViewDDL: (table: CatalogTable) => void
   onExportTable: (table: CatalogTable) => void
@@ -1169,14 +1202,28 @@ function TargetTree({
             const active = database.name === activeDatabaseName
             return (
               <div key={database.name}>
-                <button
-                  className={cn("flex h-8 w-full items-center gap-1.5 pr-2 pl-6 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/40 hover:text-foreground motion-reduce:transition-none", active && "sticky top-8 z-20 bg-[#121017]/95 text-foreground shadow-sm backdrop-blur-md")}
-                  onClick={() => onSelectDatabase(database.name)}
-                >
-                  <ChevronRight className={cn("size-3.5 transition-transform duration-200 ease-out motion-reduce:transition-none", active && "rotate-90")} />
-                  <Database className={cn("size-3.5", active && "text-gr-pink")} />
-                  <span className="truncate font-mono text-[11px]" title={database.name}>{database.name}</span>
-                </button>
+                <ContextMenu>
+                  <ContextMenuTrigger asChild>
+                    <button
+                      className={cn("flex h-8 w-full items-center gap-1.5 pr-2 pl-6 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/40 hover:text-foreground data-[state=open]:bg-muted/55 data-[state=open]:text-foreground motion-reduce:transition-none", active && "sticky top-8 z-20 bg-[#121017]/95 text-foreground shadow-sm backdrop-blur-md")}
+                      onClick={() => onSelectDatabase(database.name)}
+                    >
+                      <ChevronRight className={cn("size-3.5 transition-transform duration-200 ease-out motion-reduce:transition-none", active && "rotate-90")} />
+                      <Database className={cn("size-3.5", active && "text-gr-pink")} />
+                      <span className="truncate font-mono text-[11px]" title={database.name}>{database.name}</span>
+                    </button>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem disabled={!canExport} onSelect={() => onBulkExportDatabase(database.name)}>
+                      <Download /> Export tables
+                      {!canExport && <ContextMenuShortcut>ADMIN</ContextMenuShortcut>}
+                    </ContextMenuItem>
+                    <ContextMenuItem disabled={!canExport} onSelect={() => onImportDatabase(database.name)}>
+                      <Upload /> Import CSV files
+                      {!canExport && <ContextMenuShortcut>ADMIN</ContextMenuShortcut>}
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
                 {active && (
                   <div className="pl-10">
                     {catalogLoading && <SidebarMessage>Loading objects…</SidebarMessage>}

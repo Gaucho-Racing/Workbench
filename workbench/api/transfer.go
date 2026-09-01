@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 )
 
 const maxImportRequestBytes = 51 << 20
+const maxBulkExportTables = 256
 
 func PreviewExport(c *gin.Context) {
 	var request struct {
@@ -124,6 +126,104 @@ func ExportQuery(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "transfer_id": transferID})
+}
+
+func ExportTables(c *gin.Context) {
+	var request struct {
+		TargetID     string                `json:"target_id" binding:"required"`
+		DatabaseName string                `json:"database_name" binding:"required"`
+		Format       string                `json:"format" binding:"required"`
+		Tables       []service.ExportTable `json:"tables" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(request.Tables) == 0 || len(request.Tables) > maxBulkExportTables {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("choose between 1 and %d tables", maxBulkExportTables)})
+		return
+	}
+	exportFormat, err := service.ParseExportFormat(request.Format)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	target, err := service.GetTarget(c.Request.Context(), request.TargetID)
+	if errors.Is(err, service.ErrTargetNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	target, err = service.SelectDatabase(c.Request.Context(), target, request.DatabaseName)
+	if errors.Is(err, service.ErrDatabaseUnavailable) {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	catalog, err := service.GetCatalog(c.Request.Context(), target)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	exportable := make(map[string]struct{}, len(catalog.Tables))
+	for _, table := range catalog.Tables {
+		if table.Kind == "table" || table.Kind == "partitioned_table" {
+			exportable[table.Schema+"\x00"+table.Name] = struct{}{}
+		}
+	}
+	seen := make(map[string]struct{}, len(request.Tables))
+	for _, table := range request.Tables {
+		key := table.Schema + "\x00" + table.Name
+		if strings.TrimSpace(table.Schema) == "" || strings.TrimSpace(table.Name) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "every table requires a schema and name"})
+			return
+		}
+		if _, ok := exportable[key]; !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("table %s.%s is not available for export", table.Schema, table.Name)})
+			return
+		}
+		if _, duplicate := seen[key]; duplicate {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("table %s.%s was selected more than once", table.Schema, table.Name)})
+			return
+		}
+		seen[key] = struct{}{}
+	}
+
+	timestamp := time.Now()
+	archive, err := os.CreateTemp("", "workbench-table-export-*.zip")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "create export archive: " + err.Error()})
+		return
+	}
+	archivePath := archive.Name()
+	defer os.Remove(archivePath)
+	defer archive.Close()
+	if err := service.ExportTablesArchive(
+		c.Request.Context(), target, request.Tables, getRequestTokenEntityID(c), exportFormat, timestamp, archive,
+	); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := archive.Seek(0, 0); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "prepare export archive: " + err.Error()})
+		return
+	}
+	archiveName := fmt.Sprintf(
+		"%s-%s-tables-%s.zip",
+		safeFileName(target.Name),
+		safeFileName(target.DatabaseName),
+		timestamp.Format("20060102-150405"),
+	)
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", archiveName))
+	http.ServeContent(c.Writer, c.Request, archiveName, timestamp, archive)
 }
 
 func ImportCSV(c *gin.Context) {

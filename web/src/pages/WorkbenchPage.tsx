@@ -755,7 +755,12 @@ export default function WorkbenchPage() {
                   <SelectItem value="continue">Continue on error</SelectItem>
                 </SelectContent>
               </Select>
-              <Button size="sm" disabled={!selectedTarget || !statement.trim()} onClick={() => void execute()}>
+              <Button
+                size="sm"
+                className={cn(writeMode && "bg-gr-pink shadow-gr-pink/20 hover:bg-gr-pink/85 focus-visible:ring-gr-pink/55")}
+                disabled={!selectedTarget || !statement.trim()}
+                onClick={() => void execute()}
+              >
                 <Play className="fill-current" /> Run
                 <kbd className="ml-1 hidden rounded bg-black/20 px-1 font-mono text-[10px] sm:inline">⌘↵</kbd>
               </Button>

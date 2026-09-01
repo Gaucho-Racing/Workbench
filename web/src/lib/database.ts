@@ -15,6 +15,10 @@ export type DatabaseTarget = {
   updated_at: string
 }
 
+export type ServerDatabase = {
+  name: string
+}
+
 export type CatalogColumn = {
   name: string
   data_type: string
@@ -51,6 +55,7 @@ export type QueryColumn = {
 
 export type QueryResult = {
   run_id: string
+  database_name: string
   columns: QueryColumn[]
   rows: (string | number | boolean | null)[][]
   command_tag: string
@@ -63,6 +68,7 @@ export type QueryRun = {
   id: string
   target_id: string
   target_name: string
+  database_name: string
   statement: string
   status: string
   command_tag: string
@@ -79,11 +85,22 @@ export function useTargets() {
   })
 }
 
-export function useCatalog(targetID: string | null) {
+export function useDatabases(targetID: string | null) {
   return useQuery({
-    queryKey: ["catalog", targetID],
-    queryFn: async () => (await api.get<Catalog>(`/targets/${targetID}/catalog`)).data,
+    queryKey: ["databases", targetID],
+    queryFn: async () => (await api.get<ServerDatabase[]>(`/targets/${targetID}/databases`)).data,
     enabled: !!targetID,
+    staleTime: 60_000,
+  })
+}
+
+export function useCatalog(targetID: string | null, databaseName: string | null) {
+  return useQuery({
+    queryKey: ["catalog", targetID, databaseName],
+    queryFn: async () => (
+      await api.get<Catalog>(`/targets/${targetID}/catalog`, { params: { database: databaseName } })
+    ).data,
+    enabled: !!targetID && !!databaseName,
     staleTime: 60_000,
   })
 }

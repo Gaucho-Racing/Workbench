@@ -36,6 +36,7 @@ import {
   type QueryResult,
   type QueryRun,
   useCatalog,
+  useDatabases,
   useQueryHistory,
   useTargets,
 } from "@/lib/database"
@@ -52,12 +53,16 @@ const SchemaDiagram = lazy(() =>
 const ConnectionDialog = lazy(() =>
   import("@/components/ConnectionDialog").then((module) => ({ default: module.ConnectionDialog })),
 )
+const DatabasePicker = lazy(() =>
+  import("@/components/DatabasePicker").then((module) => ({ default: module.DatabasePicker })),
+)
 
 export default function WorkbenchPage() {
   const queryClient = useQueryClient()
   const { user, logout } = useAuth()
   const targetsQuery = useTargets()
   const [selectedTargetID, setSelectedTargetID] = useState<string | null>(null)
+  const [databaseSelection, setDatabaseSelection] = useState<{ targetID: string; databaseName: string } | null>(null)
   const [statement, setStatement] = useState(initialStatement)
   const [result, setResult] = useState<QueryResult | null>(null)
   const [queryError, setQueryError] = useState("")
@@ -76,7 +81,17 @@ export default function WorkbenchPage() {
     ? selectedTargetID
     : targets[0]?.id ?? null
   const selectedTarget = targets.find((target) => target.id === activeTargetID) ?? null
-  const catalogQuery = useCatalog(activeTargetID)
+  const databasesQuery = useDatabases(activeTargetID)
+  const databases = useMemo(() => {
+    const discovered = databasesQuery.data ?? []
+    if (!selectedTarget || discovered.some((database) => database.name === selectedTarget.database_name)) return discovered
+    return [{ name: selectedTarget.database_name }, ...discovered]
+  }, [databasesQuery.data, selectedTarget])
+  const activeDatabaseName = databaseSelection?.targetID === activeTargetID &&
+    databases.some((database) => database.name === databaseSelection.databaseName)
+    ? databaseSelection.databaseName
+    : selectedTarget?.database_name ?? null
+  const catalogQuery = useCatalog(activeTargetID, activeDatabaseName)
   const historyQuery = useQueryHistory()
 
   const execute = useCallback(async () => {
@@ -89,7 +104,7 @@ export default function WorkbenchPage() {
     try {
       const response = await api.post<QueryResult>(
         "/queries",
-        { target_id: activeTargetID, statement },
+        { target_id: activeTargetID, database_name: activeDatabaseName, statement },
         { signal: controller.signal },
       )
       setResult(response.data)
@@ -100,7 +115,7 @@ export default function WorkbenchPage() {
       abortController.current = null
       setRunning(false)
     }
-  }, [activeTargetID, queryClient, running, statement])
+  }, [activeDatabaseName, activeTargetID, queryClient, running, statement])
 
   const executeRef = useRef(execute)
   const catalogRef = useRef<CatalogTable[]>([])
@@ -190,6 +205,23 @@ export default function WorkbenchPage() {
           <span className={cn("size-1.5 rounded-full", selectedTarget ? "bg-emerald-400" : "bg-muted-foreground")} />
           <span className="max-w-48 truncate font-medium">{selectedTarget?.name ?? "No connection"}</span>
           {selectedTarget && <EnvironmentBadge environment={selectedTarget.environment} />}
+          {selectedTarget && activeDatabaseName && (
+            <>
+              <span className="text-muted-foreground/50">/</span>
+              <Suspense fallback={<span className="px-1.5 font-mono text-[11px] text-muted-foreground">{activeDatabaseName}</span>}>
+                <DatabasePicker
+                  databases={databases}
+                  value={activeDatabaseName}
+                  onValueChange={(databaseName) => {
+                    if (!activeTargetID) return
+                    setDatabaseSelection({ targetID: activeTargetID, databaseName })
+                    setResult(null)
+                    setQueryError("")
+                  }}
+                />
+              </Suspense>
+            </>
+          )}
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           {running ? (
@@ -289,7 +321,7 @@ export default function WorkbenchPage() {
             <div className="flex h-8 items-center border-b px-3 text-xs">
               <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 font-mono text-[11px]", workspaceView === "query" ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("query")}>query.sql</button>
               <button className={cn("flex h-full items-center gap-1.5 border-b-2 px-3 text-[11px]", workspaceView === "diagram" ? "border-gr-pink text-foreground" : "border-transparent text-muted-foreground")} onClick={() => setWorkspaceView("diagram")}><GitFork className="size-3" /> Diagram</button>
-              <span className="ml-2 text-muted-foreground">{selectedTarget?.database_name ?? "disconnected"}</span>
+              <span className="ml-2 text-muted-foreground">{activeDatabaseName ?? "disconnected"}</span>
             </div>
             <div className="h-[calc(100%-2rem)]">
               {workspaceView === "query" ? (
@@ -331,7 +363,7 @@ export default function WorkbenchPage() {
                 <Clock3 /> History
               </BottomTab>
               <div className="ml-auto pr-2 text-[11px] text-muted-foreground">
-                {result && bottomTab === "results" && `${result.command_tag || "Query"} · ${result.duration_ms} ms`}
+                {result && bottomTab === "results" && `${result.database_name} · ${result.command_tag || "Query"} · ${result.duration_ms} ms`}
               </div>
             </div>
             <div className="min-h-0 overflow-auto">
@@ -343,6 +375,7 @@ export default function WorkbenchPage() {
                   loading={historyQuery.isLoading}
                   onSelect={(run) => {
                     setSelectedTargetID(run.target_id)
+                    setDatabaseSelection({ targetID: run.target_id, databaseName: run.database_name })
                     setStatement(run.statement)
                     setBottomTab("results")
                   }}
@@ -500,7 +533,7 @@ function HistoryPanel({ runs, loading, onSelect }: { runs: QueryRun[]; loading: 
       {runs.map((run) => (
         <button key={run.id} className="grid w-full grid-cols-[120px_1fr_auto] items-center gap-3 px-3 py-2 text-left text-xs hover:bg-muted/35" onClick={() => onSelect(run)}>
           <div>
-            <div className="font-medium">{run.target_name}</div>
+            <div className="font-medium">{run.target_name} <span className="font-mono font-normal text-muted-foreground">/ {run.database_name}</span></div>
             <div className="mt-0.5 text-[10px] text-muted-foreground">{new Date(run.created_at).toLocaleString()}</div>
           </div>
           <code className="truncate text-[11px] text-muted-foreground">{run.statement.replace(/\s+/g, " ")}</code>

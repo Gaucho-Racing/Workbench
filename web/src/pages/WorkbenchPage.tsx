@@ -50,9 +50,19 @@ import {
   useTargets,
 } from "@/lib/database"
 import { cn } from "@/lib/utils"
-import { statementForEditor, statementRangeForEditor, type SQLStatementRange } from "@/lib/sql"
+import { sqlStatementRanges, statementForEditor, statementRangeAtOffset, statementRangeForEditor, type SQLStatementRange } from "@/lib/sql"
 
 type StatementIndicatorStatus = "idle" | "success" | "error"
+type RunAllPolicy = "abort" | "continue"
+type BatchRunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped"
+
+type BatchQueryRun = {
+  statementNumber: number
+  statement: string
+  status: BatchRunStatus
+  result: QueryResult | null
+  error: string
+}
 
 const initialStatement = `select
   current_database() as database,
@@ -81,6 +91,9 @@ export default function WorkbenchPage() {
   const [statement, setStatement] = useState(initialStatement)
   const [result, setResult] = useState<QueryResult | null>(null)
   const [queryError, setQueryError] = useState("")
+  const [batchRuns, setBatchRuns] = useState<BatchQueryRun[]>([])
+  const [selectedBatchRunIndex, setSelectedBatchRunIndex] = useState(0)
+  const [runAllPolicy, setRunAllPolicy] = useState<RunAllPolicy>("abort")
   const [running, setRunning] = useState(false)
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false)
   const [connectionTarget, setConnectionTarget] = useState<DatabaseTarget | null>(null)
@@ -125,6 +138,8 @@ export default function WorkbenchPage() {
     : selectedTarget?.database_name ?? null
   const catalogQuery = useCatalog(activeTargetID, activeDatabaseName)
   const historyQuery = useQueryHistory()
+  const selectedBatchRun = batchRuns[selectedBatchRunIndex] ?? null
+  const finishedBatchRunCount = batchRuns.filter((run) => run.status !== "queued" && run.status !== "running").length
 
   const execute = useCallback(async () => {
     if (!activeTargetID || !statement.trim() || running) return
@@ -137,6 +152,7 @@ export default function WorkbenchPage() {
     abortController.current = controller
     statementIndicatorStatus.current = "idle"
     updateStatementIndicatorRef.current()
+    setBatchRuns([])
     setRunning(true)
     setQueryError("")
     setBottomTab("results")
@@ -168,13 +184,102 @@ export default function WorkbenchPage() {
     }
   }, [activeDatabaseName, activeTargetID, queryClient, running, statement])
 
+  const executeAll = useCallback(async () => {
+    if (!activeTargetID || !statement.trim() || running) return
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    const source = model?.getValue() ?? statement
+    const ranges = sqlStatementRanges(source)
+    const cursorPosition = editor?.getPosition()
+    const cursorRange = model && cursorPosition ? statementRangeAtOffset(source, model.getOffsetAt(cursorPosition)) : ranges[0]
+    const cursorRangeIndex = cursorRange
+      ? ranges.findIndex((range) => range.start === cursorRange.start && range.end === cursorRange.end)
+      : 0
+    const statements = ranges.slice(Math.max(0, cursorRangeIndex)).map((range) => source.slice(range.start, range.end).trim())
+    if (statements.length === 0) return
+
+    const executedRevision = statementIndicatorRevision.current
+    const controller = new AbortController()
+    abortController.current = controller
+    statementIndicatorStatus.current = "idle"
+    updateStatementIndicatorRef.current()
+    const initialRuns = statements.map<BatchQueryRun>((batchStatement, index) => ({
+      statementNumber: Math.max(0, cursorRangeIndex) + index + 1,
+      statement: batchStatement,
+      status: "queued",
+      result: null,
+      error: "",
+    }))
+    setBatchRuns(initialRuns)
+    setSelectedBatchRunIndex(0)
+    setResult(null)
+    setQueryError("")
+    setBottomTab("results")
+    setRunning(true)
+
+    const updateRun = (index: number, update: Partial<BatchQueryRun>) => {
+      setBatchRuns((current) => current.map((run, runIndex) => runIndex === index ? { ...run, ...update } : run))
+    }
+    const skipRemaining = (afterIndex: number) => {
+      setBatchRuns((current) => current.map((run, runIndex) => (
+        runIndex > afterIndex && run.status === "queued" ? { ...run, status: "skipped" } : run
+      )))
+    }
+
+    try {
+      for (let index = 0; index < statements.length; index += 1) {
+        setSelectedBatchRunIndex(index)
+        updateRun(index, { status: "running" })
+        try {
+          const response = await api.post<QueryResult>(
+            "/queries",
+            { target_id: activeTargetID, database_name: activeDatabaseName, statement: statements[index] },
+            { signal: controller.signal },
+          )
+          updateRun(index, { status: "succeeded", result: response.data })
+          if (index === 0 && statementIndicatorRevision.current === executedRevision) {
+            statementIndicatorStatus.current = "success"
+            updateStatementIndicatorRef.current()
+          }
+          setBottomPaneCollapsed(false)
+        } catch (error) {
+          if (controller.signal.aborted) {
+            updateRun(index, { status: "cancelled" })
+            skipRemaining(index)
+            break
+          }
+          updateRun(index, { status: "failed", error: getErrorMessage(error) })
+          if (index === 0 && statementIndicatorRevision.current === executedRevision) {
+            statementIndicatorStatus.current = "error"
+            updateStatementIndicatorRef.current()
+          }
+          setBottomPaneCollapsed(false)
+          if (runAllPolicy === "abort") {
+            skipRemaining(index)
+            break
+          }
+        }
+      }
+      setBottomPaneCollapsed(false)
+      void queryClient.invalidateQueries({ queryKey: ["queryHistory"] })
+    } finally {
+      abortController.current = null
+      setRunning(false)
+    }
+  }, [activeDatabaseName, activeTargetID, queryClient, runAllPolicy, running, statement])
+
   const executeRef = useRef(execute)
+  const executeAllRef = useRef(executeAll)
   const catalogRef = useRef<CatalogTable[]>([])
   const completionDisposable = useRef<{ dispose: () => void } | null>(null)
 
   useEffect(() => {
     executeRef.current = execute
   }, [execute])
+
+  useEffect(() => {
+    executeAllRef.current = executeAll
+  }, [executeAll])
 
   useEffect(() => {
     catalogRef.current = catalogQuery.data?.tables ?? []
@@ -198,6 +303,12 @@ export default function WorkbenchPage() {
       label: "Execute query",
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
       run: () => executeRef.current(),
+    })
+    editor.addAction({
+      id: "workbench.execute-following-queries",
+      label: "Execute current and following queries",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter],
+      run: () => executeAllRef.current(),
     })
     const completionProvider: languages.CompletionItemProvider = {
       provideCompletionItems(model, position) {
@@ -304,6 +415,7 @@ export default function WorkbenchPage() {
     setDatabaseSelection({ targetID, databaseName })
     setResult(null)
     setQueryError("")
+    setBatchRuns([])
   }
 
   function openNewConnection() {
@@ -410,10 +522,25 @@ export default function WorkbenchPage() {
               <CircleStop /> Stop
             </Button>
           ) : (
-            <Button size="sm" disabled={!selectedTarget || !statement.trim()} onClick={() => void execute()}>
-              <Play className="fill-current" /> Run
-              <kbd className="ml-1 hidden rounded bg-black/20 px-1 font-mono text-[10px] sm:inline">⌘↵</kbd>
-            </Button>
+            <>
+              <Select value={runAllPolicy} onValueChange={(value) => setRunAllPolicy(value as RunAllPolicy)}>
+                <SelectTrigger className="h-7 w-[126px] bg-black/20 text-[10px]" aria-label="Run from here error policy">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="abort">Stop on error</SelectItem>
+                  <SelectItem value="continue">Continue on error</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button size="sm" disabled={!selectedTarget || !statement.trim()} onClick={() => void execute()}>
+                <Play className="fill-current" /> Run
+                <kbd className="ml-1 hidden rounded bg-black/20 px-1 font-mono text-[10px] sm:inline">⌘↵</kbd>
+              </Button>
+              <Button variant="secondary" size="sm" disabled={!selectedTarget || !statement.trim()} onClick={() => void executeAll()}>
+                <Play /> Run from here
+                <kbd className="ml-1 hidden rounded bg-black/20 px-1 font-mono text-[10px] xl:inline">⇧⌘↵</kbd>
+              </Button>
+            </>
           )}
           <div className="mx-1 h-5 w-px bg-border" />
           <div className="hidden items-center gap-2 px-1 sm:flex">
@@ -597,13 +724,18 @@ export default function WorkbenchPage() {
             />
             <div className="flex items-center border-b px-2">
               <BottomTab active={bottomTab === "results"} onClick={() => selectBottomTab("results")}>
-                <Columns3 /> Results {result && <span className="text-muted-foreground">{result.row_count}</span>}
+                <Columns3 /> Results
+                {batchRuns.length > 0
+                  ? <span className="text-muted-foreground">{finishedBatchRunCount}/{batchRuns.length}</span>
+                  : result && <span className="text-muted-foreground">{result.row_count}</span>}
               </BottomTab>
               <BottomTab active={bottomTab === "history"} onClick={() => selectBottomTab("history")}>
                 <Clock3 /> History
               </BottomTab>
               <div className="ml-auto min-w-0 truncate px-2 text-[11px] text-muted-foreground">
-                {result && bottomTab === "results" && `${result.database_name} · ${result.command_tag || "Query"} · ${result.duration_ms} ms`}
+                {bottomTab === "results" && selectedBatchRun
+                  ? `Statement ${selectedBatchRun.statementNumber} · ${batchRunStatusLabel(selectedBatchRun.status)}`
+                  : result && bottomTab === "results" && `${result.database_name} · ${result.command_tag || "Query"} · ${result.duration_ms} ms`}
               </div>
               <div className={cn("flex h-7 shrink-0 overflow-hidden rounded-md border", !isAdmin && "opacity-45")}>
                 <Button
@@ -646,8 +778,15 @@ export default function WorkbenchPage() {
               )}
             >
               {bottomTab === "results" ? (
-                <div key={running ? "running" : result?.run_id ?? queryError} className="h-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-200">
-                  <ResultsPanel result={result} error={queryError} running={running} />
+                <div key={batchRuns.length > 0 ? "batch" : running ? "running" : result?.run_id ?? queryError} className="h-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-200">
+                  <ResultsPanel
+                    result={result}
+                    error={queryError}
+                    running={running}
+                    batchRuns={batchRuns}
+                    selectedBatchRunIndex={selectedBatchRunIndex}
+                    onSelectBatchRun={setSelectedBatchRunIndex}
+                  />
                 </div>
               ) : (
                 <HistoryPanel
@@ -657,6 +796,7 @@ export default function WorkbenchPage() {
                     setSelectedTargetID(run.target_id)
                     setDatabaseSelection({ targetID: run.target_id, databaseName: run.database_name })
                     setStatement(run.statement)
+                    setBatchRuns([])
                     selectBottomTab("results")
                   }}
                 />
@@ -844,10 +984,71 @@ function SchemaTree({ schema, tables, onOpenTable }: { schema: string; tables: C
   )
 }
 
-function ResultsPanel({ result, error, running }: { result: QueryResult | null; error: string; running: boolean }) {
+function ResultsPanel({
+  result,
+  error,
+  running,
+  batchRuns,
+  selectedBatchRunIndex,
+  onSelectBatchRun,
+}: {
+  result: QueryResult | null
+  error: string
+  running: boolean
+  batchRuns: BatchQueryRun[]
+  selectedBatchRunIndex: number
+  onSelectBatchRun: (index: number) => void
+}) {
+  if (batchRuns.length > 0) {
+    return (
+      <BatchResultsPanel
+        runs={batchRuns}
+        selectedIndex={selectedBatchRunIndex}
+        onSelect={onSelectBatchRun}
+      />
+    )
+  }
   if (running) return <CenteredMessage>Running query…</CenteredMessage>
   if (error) return <div className="m-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs text-destructive">{error}</div>
   if (!result) return <CenteredMessage>Run a query to see results</CenteredMessage>
+  return <QueryResultView result={result} />
+}
+
+function BatchResultsPanel({ runs, selectedIndex, onSelect }: { runs: BatchQueryRun[]; selectedIndex: number; onSelect: (index: number) => void }) {
+  const selectedRun = runs[selectedIndex] ?? runs[0]
+  return (
+    <div className="grid h-full min-h-0 grid-rows-[38px_minmax(0,1fr)]">
+      <div className="flex min-w-0 gap-1 overflow-x-auto border-b bg-[#0d0c11] px-2 py-1.5">
+        {runs.map((run, index) => (
+          <button
+            key={index}
+            className={cn(
+              "flex max-w-48 shrink-0 items-center gap-2 rounded-md px-2.5 text-left font-mono text-[10px] transition-colors duration-150 motion-reduce:transition-none",
+              index === selectedIndex ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
+            )}
+            onClick={() => onSelect(index)}
+          >
+            <span className={cn("size-1.5 shrink-0 rounded-full", batchRunStatusColor(run.status))} />
+            <span className="shrink-0 font-semibold">{run.statementNumber}</span>
+            <span className="truncate">{run.statement.replace(/\s+/g, " ")}</span>
+          </button>
+        ))}
+      </div>
+      <div className="min-h-0 overflow-auto">
+        {selectedRun.status === "running" && <CenteredMessage>Running statement {selectedRun.statementNumber}…</CenteredMessage>}
+        {selectedRun.status === "queued" && <CenteredMessage>Waiting to run</CenteredMessage>}
+        {selectedRun.status === "skipped" && <CenteredMessage>Skipped after an earlier statement failed</CenteredMessage>}
+        {selectedRun.status === "cancelled" && <CenteredMessage>Cancelled</CenteredMessage>}
+        {selectedRun.status === "failed" && (
+          <div className="m-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs text-destructive">{selectedRun.error}</div>
+        )}
+        {selectedRun.status === "succeeded" && selectedRun.result && <QueryResultView result={selectedRun.result} />}
+      </div>
+    </div>
+  )
+}
+
+function QueryResultView({ result }: { result: QueryResult }) {
   if (result.columns.length === 0) {
     return <CenteredMessage>{result.command_tag || "Statement completed"} · {result.row_count} affected rows</CenteredMessage>
   }
@@ -878,6 +1079,26 @@ function ResultsPanel({ result, error, running }: { result: QueryResult | null; 
       </tbody>
     </table>
   )
+}
+
+function batchRunStatusLabel(status: BatchRunStatus) {
+  const labels: Record<BatchRunStatus, string> = {
+    queued: "Queued",
+    running: "Running",
+    succeeded: "Succeeded",
+    failed: "Failed",
+    cancelled: "Cancelled",
+    skipped: "Skipped",
+  }
+  return labels[status]
+}
+
+function batchRunStatusColor(status: BatchRunStatus) {
+  if (status === "succeeded") return "bg-emerald-400"
+  if (status === "failed") return "bg-destructive"
+  if (status === "running") return "animate-pulse bg-gr-pink"
+  if (status === "cancelled") return "bg-amber-300"
+  return "bg-muted-foreground/45"
 }
 
 function HistoryPanel({ runs, loading, onSelect }: { runs: QueryRun[]; loading: boolean; onSelect: (run: QueryRun) => void }) {

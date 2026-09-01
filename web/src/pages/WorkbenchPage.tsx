@@ -18,6 +18,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Server,
   Table2,
   Trash2,
   X,
@@ -35,6 +36,7 @@ import {
   type DatabaseTarget,
   type QueryResult,
   type QueryRun,
+  type ServerDatabase,
   useCatalog,
   useDatabases,
   useQueryHistory,
@@ -52,9 +54,6 @@ const SchemaDiagram = lazy(() =>
 )
 const ConnectionDialog = lazy(() =>
   import("@/components/ConnectionDialog").then((module) => ({ default: module.ConnectionDialog })),
-)
-const DatabasePicker = lazy(() =>
-  import("@/components/DatabasePicker").then((module) => ({ default: module.DatabasePicker })),
 )
 
 export default function WorkbenchPage() {
@@ -187,6 +186,13 @@ export default function WorkbenchPage() {
     setStatement(`select *\nfrom "${table.schema}"."${table.name}"\nlimit 100;`)
   }
 
+  function selectDatabase(targetID: string, databaseName: string) {
+    setSelectedTargetID(targetID)
+    setDatabaseSelection({ targetID, databaseName })
+    setResult(null)
+    setQueryError("")
+  }
+
   return (
     <div className="grid h-full grid-rows-[46px_minmax(0,1fr)] bg-background">
       <header className="flex items-center gap-3 border-b bg-[#0f0e13] px-2.5 shadow-[inset_0_-1px_0_rgba(225,5,163,0.06)]">
@@ -201,25 +207,17 @@ export default function WorkbenchPage() {
           <span className="font-brand text-sm font-semibold tracking-tight">Workbench</span>
         </div>
         <div className="h-5 w-px bg-border" />
-        <div className="flex min-w-0 items-center gap-2 text-xs">
+        <div className="flex items-center gap-2 text-xs">
           <span className={cn("size-1.5 rounded-full", selectedTarget ? "bg-emerald-400" : "bg-muted-foreground")} />
-          <span className="max-w-48 truncate font-medium">{selectedTarget?.name ?? "No connection"}</span>
+          <span className="whitespace-nowrap font-medium">{selectedTarget?.name ?? "No connection"}</span>
           {selectedTarget && <EnvironmentBadge environment={selectedTarget.environment} />}
           {selectedTarget && activeDatabaseName && (
             <>
               <span className="text-muted-foreground/50">/</span>
-              <Suspense fallback={<span className="px-1.5 font-mono text-[11px] text-muted-foreground">{activeDatabaseName}</span>}>
-                <DatabasePicker
-                  databases={databases}
-                  value={activeDatabaseName}
-                  onValueChange={(databaseName) => {
-                    if (!activeTargetID) return
-                    setDatabaseSelection({ targetID: activeTargetID, databaseName })
-                    setResult(null)
-                    setQueryError("")
-                  }}
-                />
-              </Suspense>
+              <span className="flex items-center gap-1.5 whitespace-nowrap font-mono text-[11px] text-muted-foreground">
+                <Database className="size-3.5 text-gr-pink" />
+                {activeDatabaseName}
+              </span>
             </>
           )}
         </div>
@@ -262,8 +260,8 @@ export default function WorkbenchPage() {
                   <Plus />
                   <span className="sr-only">New connection</span>
                 </Button>
-                <Button variant="ghost" size="icon-sm" onClick={() => void catalogQuery.refetch()} disabled={!activeTargetID}>
-                  <RefreshCw className={cn(catalogQuery.isFetching && "animate-spin")} />
+                <Button variant="ghost" size="icon-sm" onClick={() => void Promise.all([databasesQuery.refetch(), catalogQuery.refetch()])} disabled={!activeTargetID}>
+                  <RefreshCw className={cn((databasesQuery.isFetching || catalogQuery.isFetching) && "animate-spin")} />
                   <span className="sr-only">Refresh catalog</span>
                 </Button>
                 <Button variant="ghost" size="icon-sm" className="hidden lg:inline-flex" onClick={() => setSidebarOpen(false)}>
@@ -299,9 +297,14 @@ export default function WorkbenchPage() {
                   key={target.id}
                   target={target}
                   selected={target.id === activeTargetID}
+                  databases={target.id === activeTargetID ? databases : []}
+                  databasesLoading={target.id === activeTargetID && databasesQuery.isLoading}
+                  activeDatabaseName={target.id === activeTargetID ? activeDatabaseName : null}
                   catalog={target.id === activeTargetID ? catalogQuery.data?.tables ?? [] : []}
+                  catalogLoading={target.id === activeTargetID && catalogQuery.isLoading}
                   filter={filter}
                   onSelect={() => setSelectedTargetID(target.id)}
+                  onSelectDatabase={(databaseName) => selectDatabase(target.id, databaseName)}
                   onOpenTable={openTable}
                   onDelete={() => setTargetPendingDeletion(target)}
                 />
@@ -413,17 +416,27 @@ export default function WorkbenchPage() {
 function TargetTree({
   target,
   selected,
+  databases,
+  databasesLoading,
+  activeDatabaseName,
   catalog,
+  catalogLoading,
   filter,
   onSelect,
+  onSelectDatabase,
   onOpenTable,
   onDelete,
 }: {
   target: DatabaseTarget
   selected: boolean
+  databases: ServerDatabase[]
+  databasesLoading: boolean
+  activeDatabaseName: string | null
   catalog: CatalogTable[]
+  catalogLoading: boolean
   filter: string
   onSelect: () => void
+  onSelectDatabase: (databaseName: string) => void
   onOpenTable: (table: CatalogTable) => void
   onDelete: () => void
 }) {
@@ -445,12 +458,12 @@ function TargetTree({
       <div
         className={cn("group flex h-8 items-center gap-1.5 border-l-2 px-2 text-xs", selected ? "border-gr-pink bg-gr-purple/10 text-foreground" : "border-transparent text-muted-foreground hover:bg-muted/50")}
       >
-        <button className="grid size-5 place-items-center" onClick={() => setExpanded(!expanded)}>
+        <button className="grid size-5 place-items-center" onClick={() => { setExpanded(!expanded); if (!selected) onSelect() }}>
           {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
         </button>
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onSelect}>
-          <Database className={cn("size-3.5", selected && "text-gr-pink")} />
-          <span className="truncate font-medium">{target.name}</span>
+          <Server className={cn("size-3.5", selected && "text-gr-purple")} />
+          <span className="truncate font-medium" title={target.name}>{target.name}</span>
           <EnvironmentBadge environment={target.environment} />
         </button>
         <Button variant="ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100" onClick={onDelete}>
@@ -459,11 +472,33 @@ function TargetTree({
         </Button>
       </div>
       {selected && expanded && (
-        <div className="pb-1 pl-5">
-          {Array.from(schemas.entries()).map(([schema, tables]) => (
-            <SchemaTree key={schema} schema={schema} tables={tables} onOpenTable={onOpenTable} />
-          ))}
-          {catalog.length === 0 && <SidebarMessage>No objects found</SidebarMessage>}
+        <div className="pb-1">
+          {databasesLoading && <SidebarMessage>Discovering databases…</SidebarMessage>}
+          {databases.map((database) => {
+            const active = database.name === activeDatabaseName
+            return (
+              <div key={database.name}>
+                <button
+                  className={cn("flex h-8 w-full items-center gap-1.5 pr-2 pl-6 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground", active && "text-foreground")}
+                  onClick={() => onSelectDatabase(database.name)}
+                >
+                  {active ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+                  <Database className={cn("size-3.5", active && "text-gr-pink")} />
+                  <span className="truncate font-mono text-[11px]" title={database.name}>{database.name}</span>
+                </button>
+                {active && (
+                  <div className="pl-10">
+                    {catalogLoading && <SidebarMessage>Loading objects…</SidebarMessage>}
+                    {!catalogLoading && Array.from(schemas.entries()).map(([schema, tables]) => (
+                      <SchemaTree key={schema} schema={schema} tables={tables} onOpenTable={onOpenTable} />
+                    ))}
+                    {!catalogLoading && catalog.length === 0 && <SidebarMessage>No objects found</SidebarMessage>}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          {!databasesLoading && databases.length === 0 && <SidebarMessage>No databases available</SidebarMessage>}
         </div>
       )}
     </div>

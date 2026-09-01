@@ -8,17 +8,25 @@ export type SQLStatementRange = {
 export function statementForEditor(instance: editor.IStandaloneCodeEditor | null, fallback: string) {
   const model = instance?.getModel()
   if (!instance || !model) return fallback.trim()
+  const range = statementRangeForEditor(instance)
+  return range ? model.getValue().slice(range.start, range.end).trim() : fallback.trim()
+}
+
+export function statementRangeForEditor(instance: editor.IStandaloneCodeEditor | null): SQLStatementRange | null {
+  const model = instance?.getModel()
+  if (!instance || !model) return null
 
   const selection = instance.getSelection()
-  if (selection && !selection.isEmpty()) {
-    const selected = model.getValueInRange(selection).trim()
-    if (selected) return selected
+  if (selection && !selection.isEmpty() && model.getValueInRange(selection).trim()) {
+    return trimRange(
+      model.getValue(),
+      model.getOffsetAt(selection.getStartPosition()),
+      model.getOffsetAt(selection.getEndPosition()),
+    )
   }
 
   const position = instance.getPosition()
-  if (!position) return fallback.trim()
-  const range = statementRangeAtOffset(model.getValue(), model.getOffsetAt(position))
-  return range ? model.getValue().slice(range.start, range.end).trim() : fallback.trim()
+  return position ? statementRangeAtOffset(model.getValue(), model.getOffsetAt(position)) : null
 }
 
 export function statementRangeAtOffset(sql: string, offset: number): SQLStatementRange | null {

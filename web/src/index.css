@@ -93,3 +93,15 @@
   scrollbar-color: rgb(255 255 255 / 15%) transparent;
   scrollbar-width: thin;
 }
+
+.monaco-editor .workbench-statement-rail {
+  width: 3px !important;
+  margin-left: 5px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--gr-purple), var(--gr-pink));
+  box-shadow: 0 0 8px rgb(225 5 163 / 22%);
+}
+
+.monaco-editor .workbench-statement-line-number {
+  color: color-mix(in oklab, var(--gr-pink) 48%, #a7a3ad) !important;
+}

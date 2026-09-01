@@ -48,7 +48,7 @@ import {
   useTargets,
 } from "@/lib/database"
 import { cn } from "@/lib/utils"
-import { statementForEditor } from "@/lib/sql"
+import { statementForEditor, statementRangeForEditor } from "@/lib/sql"
 
 const initialStatement = `select
   current_database() as database,
@@ -143,6 +143,8 @@ export default function WorkbenchPage() {
   const executeRef = useRef(execute)
   const catalogRef = useRef<CatalogTable[]>([])
   const completionDisposable = useRef<{ dispose: () => void } | null>(null)
+  const statementDecoration = useRef<editor.IEditorDecorationsCollection | null>(null)
+  const statementIndicatorDisposables = useRef<{ dispose: () => void }[]>([])
 
   useEffect(() => {
     executeRef.current = execute
@@ -156,7 +158,11 @@ export default function WorkbenchPage() {
     if (workspaceView !== "query") editorRef.current = null
   }, [workspaceView])
 
-  useEffect(() => () => completionDisposable.current?.dispose(), [])
+  useEffect(() => () => {
+    completionDisposable.current?.dispose()
+    statementDecoration.current?.clear()
+    statementIndicatorDisposables.current.forEach((disposable) => disposable.dispose())
+  }, [])
 
   const mountEditor: OnMount = (editor, monaco) => {
     editorRef.current = editor
@@ -195,6 +201,34 @@ export default function WorkbenchPage() {
     }
     completionDisposable.current?.dispose()
     completionDisposable.current = monaco.languages.registerCompletionItemProvider("pgsql", completionProvider)
+
+    statementDecoration.current?.clear()
+    statementIndicatorDisposables.current.forEach((disposable) => disposable.dispose())
+    const decoration = editor.createDecorationsCollection()
+    statementDecoration.current = decoration
+    const updateStatementIndicator = () => {
+      const model = editor.getModel()
+      const range = statementRangeForEditor(editor)
+      if (!model || !range) {
+        decoration.clear()
+        return
+      }
+      const start = model.getPositionAt(range.start)
+      const end = model.getPositionAt(Math.max(range.start, range.end - 1))
+      decoration.set([{
+        range: new monaco.Range(start.lineNumber, 1, end.lineNumber, model.getLineMaxColumn(end.lineNumber)),
+        options: {
+          isWholeLine: true,
+          linesDecorationsClassName: "workbench-statement-rail",
+          lineNumberClassName: "workbench-statement-line-number",
+        },
+      }])
+    }
+    statementIndicatorDisposables.current = [
+      editor.onDidChangeCursorSelection(updateStatementIndicator),
+      editor.onDidChangeModelContent(updateStatementIndicator),
+    ]
+    updateStatementIndicator()
   }
 
   async function deleteTarget(target: DatabaseTarget) {

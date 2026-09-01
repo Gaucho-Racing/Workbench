@@ -200,7 +200,7 @@ export function BulkExportDialog({
 
         <DialogFooter className="items-center sm:justify-between">
           <p className="mr-auto max-w-md text-[10px] leading-relaxed text-muted-foreground">
-            Each table is exported as a separate {formatLabels[format]} file using a read-only query and recorded in transfer history.
+            Each table is exported as a separate {formatLabels[format]} file. The archive also includes schema.sql with the selected tables&apos; DDL.
           </p>
           <Button variant="ghost" disabled={downloading} onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button disabled={downloading || selectedTables.length === 0} onClick={() => void download()}>

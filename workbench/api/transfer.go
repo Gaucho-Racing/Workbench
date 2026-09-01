@@ -64,6 +64,8 @@ func ExportQuery(c *gin.Context) {
 		DatabaseName string `json:"database_name"`
 		Statement    string `json:"statement" binding:"required"`
 		SourceName   string `json:"source_name"`
+		SourceSchema string `json:"source_schema"`
+		SourceTable  string `json:"source_table"`
 		Format       string `json:"format" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -103,6 +105,10 @@ func ExportQuery(c *gin.Context) {
 	if sourceName == "" {
 		sourceName = "query"
 	}
+	sqlTableName := strings.TrimSpace(request.SourceTable)
+	if sqlTableName == "" {
+		sqlTableName = sourceName
+	}
 	timestamp := time.Now().Format("20060102-150405")
 	fileName := fmt.Sprintf("%s-%s-%s-%s.%s", safeFileName(target.Name), safeFileName(target.DatabaseName), safeFileName(sourceName), timestamp, exportFormat.Extension())
 	c.Header("Content-Type", exportFormat.ContentType())
@@ -113,8 +119,10 @@ func ExportQuery(c *gin.Context) {
 		request.Statement,
 		getRequestTokenEntityID(c),
 		service.ExportOptions{
-			Format:       exportFormat,
-			SQLTableName: safeSQLIdentifier(target.DatabaseName) + "_export_" + strings.ReplaceAll(timestamp, "-", "_"),
+			Format:        exportFormat,
+			SQLSchemaName: strings.TrimSpace(request.SourceSchema),
+			SQLTableName:  sqlTableName,
+			SQLIncludeDDL: true,
 		},
 		c.Writer,
 	)
@@ -344,18 +352,4 @@ func safeFileName(value string) string {
 		return '-'
 	}, value)
 	return strings.Trim(value, "-")
-}
-
-func safeSQLIdentifier(value string) string {
-	value = strings.Map(func(character rune) rune {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '_' {
-			return character
-		}
-		return '_'
-	}, value)
-	value = strings.Trim(value, "_")
-	if value == "" {
-		return "workbench"
-	}
-	return value
 }

@@ -153,6 +153,7 @@ export default function WorkbenchPage() {
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv")
   const [exportStatement, setExportStatement] = useState("")
   const [exportSourceName, setExportSourceName] = useState("query")
+  const [exportSourceTable, setExportSourceTable] = useState<Pick<CatalogTable, "schema" | "name"> | null>(null)
   const [ddlTable, setDDLTable] = useState<CatalogTable | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [bottomTab, setBottomTab] = useState<"results" | "history">("results")
@@ -173,6 +174,7 @@ export default function WorkbenchPage() {
   const statementIndicatorDisposables = useRef<{ dispose: () => void }[]>([])
   const statementIndicatorStatus = useRef<StatementIndicatorStatus>("idle")
   const statementIndicatorRevision = useRef(0)
+  const statementIndicatorFrame = useRef<number | null>(null)
   const updateStatementIndicatorRef = useRef<() => void>(() => undefined)
   const workspaceRef = useRef<HTMLElement | null>(null)
   const bottomPaneResizingRef = useRef(false)
@@ -366,6 +368,7 @@ export default function WorkbenchPage() {
     statementDecoration.current?.clear()
     statementRailElement.current?.remove()
     statementIndicatorDisposables.current.forEach((disposable) => disposable.dispose())
+    if (statementIndicatorFrame.current !== null) window.cancelAnimationFrame(statementIndicatorFrame.current)
   }, [])
 
   const mountEditor: OnMount = (editor, monaco) => {
@@ -413,6 +416,10 @@ export default function WorkbenchPage() {
     completionDisposable.current?.dispose()
     completionDisposable.current = monaco.languages.registerCompletionItemProvider("pgsql", completionProvider)
 
+    if (statementIndicatorFrame.current !== null) {
+      window.cancelAnimationFrame(statementIndicatorFrame.current)
+      statementIndicatorFrame.current = null
+    }
     statementDecoration.current?.clear()
     statementRailElement.current?.remove()
     statementIndicatorDisposables.current.forEach((disposable) => disposable.dispose())
@@ -457,9 +464,15 @@ export default function WorkbenchPage() {
     }
     const resetStatementIndicatorForModel = () => {
       decoration.clear()
-      decoration = editor.createDecorationsCollection()
-      statementDecoration.current = decoration
-      resetStatementIndicator()
+      statementIndicatorRevision.current += 1
+      statementIndicatorStatus.current = "idle"
+      if (statementIndicatorFrame.current !== null) window.cancelAnimationFrame(statementIndicatorFrame.current)
+      statementIndicatorFrame.current = window.requestAnimationFrame(() => {
+        statementIndicatorFrame.current = null
+        decoration = editor.createDecorationsCollection()
+        statementDecoration.current = decoration
+        updateStatementIndicator()
+      })
     }
     updateStatementIndicatorRef.current = updateStatementIndicator
     statementIndicatorDisposables.current = [
@@ -600,6 +613,7 @@ export default function WorkbenchPage() {
     if (!isAdmin || !activeTargetID || !activeDatabaseName) return
     setExportStatement(selectStatementForTable(table.schema, table.name))
     setExportSourceName(table.name)
+    setExportSourceTable({ schema: table.schema, name: table.name })
     setExportDialogOpen(true)
   }
 
@@ -636,6 +650,7 @@ export default function WorkbenchPage() {
     if (!executableStatement) return
     setExportStatement(executableStatement)
     setExportSourceName("query")
+    setExportSourceTable(null)
     setExportDialogOpen(true)
   }
 
@@ -1185,6 +1200,7 @@ export default function WorkbenchPage() {
             databaseName={activeDatabaseName}
             statement={exportStatement}
             sourceName={exportSourceName}
+            sourceTable={exportSourceTable}
             format={exportFormat}
             onFormatChange={setExportFormat}
           />

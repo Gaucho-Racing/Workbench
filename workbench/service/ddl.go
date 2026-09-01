@@ -28,18 +28,7 @@ func GetRelationDDL(ctx context.Context, target model.DatabaseTarget, schema str
 	}
 	defer pool.Release()
 
-	var oid uint32
-	var relationKind string
-	err = pool.QueryRow(ctx, `
-		SELECT c.oid, c.relkind::text
-		FROM pg_catalog.pg_class c
-		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname = $1
-		  AND c.relname = $2
-		  AND c.relkind IN ('r', 'p', 'v', 'm')`, schema, relation).Scan(&oid, &relationKind)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrRelationNotFound
-	}
+	oid, relationKind, err := relationMetadata(ctx, pool, schema, relation)
 	if err != nil {
 		return "", err
 	}
@@ -49,6 +38,68 @@ func GetRelationDDL(ctx context.Context, target model.DatabaseTarget, schema str
 		return getViewDDL(ctx, pool, oid, qualifiedName, relationKind == "m")
 	}
 	return getTableDDL(ctx, pool, oid, qualifiedName, relationKind == "p")
+}
+
+func GetTablesDDL(ctx context.Context, target model.DatabaseTarget, tables []ExportTable) (string, error) {
+	pool, err := TargetPool(ctx, target)
+	if err != nil {
+		return "", err
+	}
+	defer pool.Release()
+
+	schemas := make([]string, 0)
+	seenSchemas := make(map[string]struct{})
+	createStatements := make([]string, 0, len(tables))
+	postStatements := make([]string, 0)
+	for _, table := range tables {
+		if _, seen := seenSchemas[table.Schema]; !seen {
+			seenSchemas[table.Schema] = struct{}{}
+			schemas = append(schemas, table.Schema)
+		}
+		oid, relationKind, metadataErr := relationMetadata(ctx, pool, table.Schema, table.Name)
+		if metadataErr != nil {
+			return "", metadataErr
+		}
+		if relationKind != "r" && relationKind != "p" {
+			return "", fmt.Errorf("%s.%s is not a table", table.Schema, table.Name)
+		}
+		qualifiedName := pgx.Identifier{table.Schema, table.Name}.Sanitize()
+		createStatement, relationPostStatements, ddlErr := getTableDDLParts(ctx, pool, oid, qualifiedName, relationKind == "p")
+		if ddlErr != nil {
+			return "", ddlErr
+		}
+		createStatements = append(createStatements, createStatement)
+		postStatements = append(postStatements, relationPostStatements...)
+	}
+
+	statements := make([]string, 0, len(schemas)+len(createStatements)+len(postStatements))
+	for _, schema := range schemas {
+		statements = append(statements, "CREATE SCHEMA IF NOT EXISTS "+pgx.Identifier{schema}.Sanitize()+";")
+	}
+	statements = append(statements, createStatements...)
+	for _, statement := range postStatements {
+		statements = append(statements, statement+";")
+	}
+	return strings.Join(statements, "\n\n") + "\n", nil
+}
+
+func relationMetadata(ctx context.Context, pool *targetPoolLease, schema string, relation string) (uint32, string, error) {
+	var oid uint32
+	var relationKind string
+	err := pool.QueryRow(ctx, `
+		SELECT c.oid, c.relkind::text
+		FROM pg_catalog.pg_class c
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = $1
+		  AND c.relname = $2
+		  AND c.relkind IN ('r', 'p', 'v', 'm')`, schema, relation).Scan(&oid, &relationKind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, "", ErrRelationNotFound
+	}
+	if err != nil {
+		return 0, "", err
+	}
+	return oid, relationKind, nil
 }
 
 func getViewDDL(ctx context.Context, pool *targetPoolLease, oid uint32, qualifiedName string, materialized bool) (string, error) {
@@ -75,16 +126,28 @@ func getViewDDL(ctx context.Context, pool *targetPoolLease, oid uint32, qualifie
 }
 
 func getTableDDL(ctx context.Context, pool *targetPoolLease, oid uint32, qualifiedName string, partitioned bool) (string, error) {
-	columns, err := relationColumns(ctx, pool, oid)
+	statement, postStatements, err := getTableDDLParts(ctx, pool, oid, qualifiedName, partitioned)
 	if err != nil {
 		return "", err
+	}
+	if len(postStatements) > 0 {
+		statement += "\n\n" + strings.Join(postStatements, ";\n") + ";"
+	}
+	return statement, nil
+}
+
+func getTableDDLParts(ctx context.Context, pool *targetPoolLease, oid uint32, qualifiedName string, partitioned bool) (string, []string, error) {
+	columns, err := relationColumns(ctx, pool, oid)
+	if err != nil {
+		return "", nil, err
 	}
 	constraints, err := relationConstraints(ctx, pool, oid)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	definitions := make([]string, 0, len(columns)+len(constraints))
+	postStatements := make([]string, 0)
 	for _, column := range columns {
 		definition := "  " + pgx.Identifier{column.name}.Sanitize() + " " + column.dataType
 		switch column.identity {
@@ -110,14 +173,19 @@ func getTableDDL(ctx context.Context, pool *targetPoolLease, oid uint32, qualifi
 		definitions = append(definitions, definition)
 	}
 	for _, constraint := range constraints {
-		definitions = append(definitions, "  CONSTRAINT "+pgx.Identifier{constraint.name}.Sanitize()+" "+constraint.definition)
+		constraintDefinition := "CONSTRAINT " + pgx.Identifier{constraint.name}.Sanitize() + " " + constraint.definition
+		if constraint.kind == "f" {
+			postStatements = append(postStatements, "ALTER TABLE "+qualifiedName+" ADD "+constraintDefinition)
+			continue
+		}
+		definitions = append(definitions, "  "+constraintDefinition)
 	}
 
 	statement := "CREATE TABLE " + qualifiedName + " (\n" + strings.Join(definitions, ",\n") + "\n)"
 	if partitioned {
 		var partitionKey string
 		if err := pool.QueryRow(ctx, "SELECT pg_catalog.pg_get_partkeydef($1::oid)", oid).Scan(&partitionKey); err != nil {
-			return "", err
+			return "", nil, err
 		}
 		statement += "\nPARTITION BY " + partitionKey
 	}
@@ -125,12 +193,10 @@ func getTableDDL(ctx context.Context, pool *targetPoolLease, oid uint32, qualifi
 
 	indexes, err := relationIndexes(ctx, pool, oid)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	if len(indexes) > 0 {
-		statement += "\n\n" + strings.Join(indexes, ";\n") + ";"
-	}
-	return statement, nil
+	postStatements = append(postStatements, indexes...)
+	return statement, postStatements, nil
 }
 
 func relationColumns(ctx context.Context, pool *targetPoolLease, oid uint32) ([]relationColumn, error) {
@@ -165,12 +231,13 @@ func relationColumns(ctx context.Context, pool *targetPoolLease, oid uint32) ([]
 
 type relationConstraint struct {
 	name       string
+	kind       string
 	definition string
 }
 
 func relationConstraints(ctx context.Context, pool *targetPoolLease, oid uint32) ([]relationConstraint, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT con.conname, pg_catalog.pg_get_constraintdef(con.oid, true)
+		SELECT con.conname, con.contype::text, pg_catalog.pg_get_constraintdef(con.oid, true)
 		FROM pg_catalog.pg_constraint con
 		WHERE con.conrelid = $1
 		  AND con.contype <> 'n'
@@ -183,7 +250,7 @@ func relationConstraints(ctx context.Context, pool *targetPoolLease, oid uint32)
 	constraints := []relationConstraint{}
 	for rows.Next() {
 		var constraint relationConstraint
-		if err := rows.Scan(&constraint.name, &constraint.definition); err != nil {
+		if err := rows.Scan(&constraint.name, &constraint.kind, &constraint.definition); err != nil {
 			return nil, err
 		}
 		constraints = append(constraints, constraint)

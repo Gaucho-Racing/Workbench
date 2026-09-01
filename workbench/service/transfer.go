@@ -89,11 +89,13 @@ const (
 )
 
 type ExportOptions struct {
-	Format       ExportFormat
-	SQLTableName string
-	SchemaName   string
-	TableName    string
-	FileName     string
+	Format        ExportFormat
+	SQLSchemaName string
+	SQLTableName  string
+	SQLIncludeDDL bool
+	SchemaName    string
+	TableName     string
+	FileName      string
 }
 
 type ExportTable struct {
@@ -304,8 +306,25 @@ func ExportTablesArchive(
 	if len(tables) == 0 {
 		return fmt.Errorf("at least one table is required")
 	}
+	schemaDDL, err := GetTablesDDL(ctx, target, tables)
+	if err != nil {
+		return fmt.Errorf("build schema export: %w", err)
+	}
 
 	archive := zip.NewWriter(destination)
+	schemaEntry, err := archive.CreateHeader(&zip.FileHeader{
+		Name:     "schema.sql",
+		Method:   zip.Deflate,
+		Modified: timestamp,
+	})
+	if err != nil {
+		_ = archive.Close()
+		return fmt.Errorf("create schema archive entry: %w", err)
+	}
+	if _, err := io.WriteString(schemaEntry, schemaDDL); err != nil {
+		_ = archive.Close()
+		return fmt.Errorf("write schema archive entry: %w", err)
+	}
 	timestampValue := timestamp.Format("20060102-150405")
 	for _, table := range tables {
 		sourceName := table.Schema + "-" + table.Name
@@ -333,11 +352,13 @@ func ExportTablesArchive(
 			statement,
 			actorEntityID,
 			ExportOptions{
-				Format:       format,
-				SQLTableName: table.Schema + "_" + table.Name,
-				SchemaName:   table.Schema,
-				TableName:    table.Name,
-				FileName:     fileName,
+				Format:        format,
+				SQLSchemaName: table.Schema,
+				SQLTableName:  table.Name,
+				SQLIncludeDDL: false,
+				SchemaName:    table.Schema,
+				TableName:     table.Name,
+				FileName:      fileName,
 			},
 			entry,
 		)
@@ -387,7 +408,7 @@ func newExportEncoder(options ExportOptions, columnNames []string, destination i
 	case ExportFormatParquet:
 		return newParquetExportEncoder(columnNames, destination)
 	case ExportFormatSQL:
-		return newSQLExportEncoder(options.SQLTableName, columnNames, destination)
+		return newSQLExportEncoder(options.SQLSchemaName, options.SQLTableName, columnNames, options.SQLIncludeDDL, destination)
 	default:
 		return nil, fmt.Errorf("unsupported export format %q", options.Format)
 	}
@@ -521,16 +542,22 @@ type sqlExportEncoder struct {
 	columns     string
 }
 
-func newSQLExportEncoder(tableName string, columnNames []string, destination io.Writer) (exportEncoder, error) {
+func newSQLExportEncoder(schemaName string, tableName string, columnNames []string, includeDDL bool, destination io.Writer) (exportEncoder, error) {
 	quotedColumns := make([]string, len(columnNames))
 	definitions := make([]string, len(columnNames))
 	for index, columnName := range columnNames {
 		quotedColumns[index] = pgx.Identifier{columnName}.Sanitize()
 		definitions[index] = quotedColumns[index] + " text"
 	}
-	quotedTable := pgx.Identifier{tableName}.Sanitize()
-	if _, err := fmt.Fprintf(destination, "CREATE TABLE %s (\n  %s\n);\n\n", quotedTable, strings.Join(definitions, ",\n  ")); err != nil {
-		return nil, err
+	tableIdentifier := pgx.Identifier{tableName}
+	if strings.TrimSpace(schemaName) != "" {
+		tableIdentifier = pgx.Identifier{schemaName, tableName}
+	}
+	quotedTable := tableIdentifier.Sanitize()
+	if includeDDL {
+		if _, err := fmt.Fprintf(destination, "CREATE TABLE %s (\n  %s\n);\n\n", quotedTable, strings.Join(definitions, ",\n  ")); err != nil {
+			return nil, err
+		}
 	}
 	return &sqlExportEncoder{destination: destination, tableName: quotedTable, columns: strings.Join(quotedColumns, ", ")}, nil
 }

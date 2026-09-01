@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { api, getErrorMessage } from "@/lib/api"
-import type { DatabaseTarget, QueryColumn } from "@/lib/database"
+import type { CatalogTable, DatabaseTarget, QueryColumn } from "@/lib/database"
 
 export type ExportFormat = "csv" | "json" | "parquet" | "sql"
 
@@ -25,6 +25,7 @@ type ExportDialogProps = {
   databaseName: string
   statement: string
   sourceName: string
+  sourceTable: Pick<CatalogTable, "schema" | "name"> | null
   format: ExportFormat
   onFormatChange: (format: ExportFormat) => void
 }
@@ -43,7 +44,7 @@ const formatLabels: Record<ExportFormat, string> = {
   sql: "SQL",
 }
 
-export function ExportDialog({ open, onOpenChange, target, databaseName, statement, sourceName, format, onFormatChange }: ExportDialogProps) {
+export function ExportDialog({ open, onOpenChange, target, databaseName, statement, sourceName, sourceTable, format, onFormatChange }: ExportDialogProps) {
   const [downloading, setDownloading] = useState(false)
   const previewQuery = useQuery({
     queryKey: ["exportPreview", target.id, databaseName, statement],
@@ -67,8 +68,8 @@ export function ExportDialog({ open, onOpenChange, target, databaseName, stateme
     if (!preview || format === "parquet") return ""
     if (format === "csv") return csvPreview(preview)
     if (format === "json") return jsonPreview(preview)
-    return sqlPreview(preview)
-  }, [format, preview])
+    return sqlPreview(preview, sourceName, sourceTable)
+  }, [format, preview, sourceName, sourceTable])
 
   async function download() {
     if (downloading) return
@@ -76,7 +77,15 @@ export function ExportDialog({ open, onOpenChange, target, databaseName, stateme
     try {
       const response = await api.post<Blob>(
         "/exports",
-        { target_id: target.id, database_name: databaseName, statement, source_name: sourceName, format },
+        {
+          target_id: target.id,
+          database_name: databaseName,
+          statement,
+          source_name: sourceName,
+          source_schema: sourceTable?.schema ?? "",
+          source_table: sourceTable?.name ?? "",
+          format,
+        },
         { responseType: "blob" },
       )
       const disposition = String(response.headers["content-disposition"] ?? "")
@@ -215,8 +224,10 @@ function jsonPreview(preview: ExportPreview) {
   return JSON.stringify(rows, null, 2)
 }
 
-function sqlPreview(preview: ExportPreview) {
-  const tableName = '"workbench_export"'
+function sqlPreview(preview: ExportPreview, sourceName: string, sourceTable: Pick<CatalogTable, "schema" | "name"> | null) {
+  const tableName = sourceTable
+    ? `${quoteIdentifier(sourceTable.schema)}.${quoteIdentifier(sourceTable.name)}`
+    : quoteIdentifier(sourceName || "query")
   const columns = preview.columns.map((column) => quoteIdentifier(column.name))
   const createStatement = `CREATE TABLE ${tableName} (\n  ${columns.map((column) => `${column} text`).join(",\n  ")}\n);`
   const inserts = preview.rows.map((row) => (

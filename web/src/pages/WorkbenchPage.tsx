@@ -729,7 +729,7 @@ export default function WorkbenchPage() {
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           <span className={cn(
-            "mr-1 overflow-hidden rounded border px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-wide transition-[color,background-color,border-color,box-shadow] duration-500 ease-out",
+            "mr-1 inline-flex h-7 items-center overflow-hidden rounded-md border px-2 font-mono text-[9px] font-semibold tracking-wide transition-[color,background-color,border-color,box-shadow] duration-500 ease-out",
             writeMode
               ? "border-gr-pink/30 bg-gr-pink/10 text-pink-200 shadow-[0_0_12px_rgba(225,5,163,0.08)]"
               : "border-gr-purple/30 bg-gr-purple/10 text-purple-200 shadow-[0_0_12px_rgba(132,18,252,0.08)]",

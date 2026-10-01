@@ -103,3 +103,7 @@ If you have a suggestion that would make this better, please fork the repo and c
 3. Commit your Changes (`git commit -m 'Add my amazing feature'`)
 4. Push to the Branch (`git push origin gh-username/my-amazing-feature`)
 5. Open a Pull Request
+
+## License
+
+Distributed under the MIT License. See `LICENSE.txt` for more information.

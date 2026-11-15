@@ -22,6 +22,9 @@ type relationColumn struct {
 }
 
 func GetRelationDDL(ctx context.Context, target model.DatabaseTarget, schema string, relation string) (string, error) {
+	if target.Engine == model.EngineClickHouse {
+		return getClickHouseRelationDDL(ctx, target, schema, relation)
+	}
 	pool, err := TargetPool(ctx, target)
 	if err != nil {
 		return "", err
@@ -41,6 +44,9 @@ func GetRelationDDL(ctx context.Context, target model.DatabaseTarget, schema str
 }
 
 func GetTablesDDL(ctx context.Context, target model.DatabaseTarget, tables []ExportTable) (string, error) {
+	if target.Engine == model.EngineClickHouse {
+		return getClickHouseTablesDDL(ctx, target, tables)
+	}
 	pool, err := TargetPool(ctx, target)
 	if err != nil {
 		return "", err

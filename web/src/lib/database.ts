@@ -2,9 +2,12 @@ import { useQuery } from "@tanstack/react-query"
 
 import { api } from "@/lib/api"
 
+export type DatabaseEngine = "postgres" | "clickhouse"
+
 export type DatabaseTarget = {
   id: string
   name: string
+  engine: DatabaseEngine
   environment: string
   host: string
   port: number
@@ -51,6 +54,7 @@ export type Catalog = {
 export type QueryColumn = {
   name: string
   data_type_oid: number
+  data_type?: string
 }
 
 export type QueryResult = {

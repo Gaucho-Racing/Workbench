@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { api, getErrorMessage } from "@/lib/api"
-import type { DatabaseTarget } from "@/lib/database"
+import type { DatabaseEngine, DatabaseTarget } from "@/lib/database"
 
 type ConnectionDialogProps = {
   open: boolean
@@ -24,8 +24,11 @@ type ConnectionDialogProps = {
   onSaved: (target: DatabaseTarget) => void
 }
 
+const defaultPorts: Record<DatabaseEngine, string> = { postgres: "5432", clickhouse: "9000" }
+
 const initialForm = {
   name: "",
+  engine: "postgres" as DatabaseEngine,
   environment: "DEV",
   host: "",
   port: "5432",
@@ -39,6 +42,7 @@ function formForTarget(target?: DatabaseTarget | null) {
   if (!target) return initialForm
   return {
     name: target.name,
+    engine: target.engine,
     environment: target.environment,
     host: target.host,
     port: String(target.port),
@@ -75,6 +79,15 @@ export function ConnectionDialog({ open, onOpenChange, target, onSaved }: Connec
     setForm((current) => ({ ...current, [field]: value }))
   }
 
+  function updateEngine(engine: DatabaseEngine) {
+    setForm((current) => ({
+      ...current,
+      engine,
+      port: current.port === defaultPorts[current.engine] ? defaultPorts[engine] : current.port,
+      ssl_mode: engine === "clickhouse" && current.ssl_mode === "prefer" ? "disable" : current.ssl_mode,
+    }))
+  }
+
   function submit(event: FormEvent) {
     event.preventDefault()
     mutation.mutate()
@@ -107,9 +120,18 @@ export function ConnectionDialog({ open, onOpenChange, target, onSaved }: Connec
               </Select>
             </Field>
           </div>
+          <Field label="Engine">
+            <Select value={form.engine} onValueChange={(value) => updateEngine(value as DatabaseEngine)} disabled={editing}>
+              <SelectTrigger aria-label="Engine"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="postgres">PostgreSQL</SelectItem>
+                <SelectItem value="clickhouse">ClickHouse (native protocol)</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
           <div className="grid grid-cols-[1fr_100px] gap-3">
             <Field label="Host">
-              <Input value={form.host} onChange={(event) => update("host", event.target.value)} placeholder="postgres.internal" required />
+              <Input value={form.host} onChange={(event) => update("host", event.target.value)} placeholder={form.engine === "clickhouse" ? "clickhouse.internal" : "postgres.internal"} required />
             </Field>
             <Field label="Port">
               <Input inputMode="numeric" pattern="[0-9]*" maxLength={5} value={form.port} onChange={(event) => update("port", event.target.value.replace(/\D/g, ""))} required />
@@ -134,7 +156,7 @@ export function ConnectionDialog({ open, onOpenChange, target, onSaved }: Connec
                   <SelectItem value="require">Require</SelectItem>
                   <SelectItem value="verify-full">Verify full</SelectItem>
                   <SelectItem value="verify-ca">Verify CA</SelectItem>
-                  <SelectItem value="prefer">Prefer</SelectItem>
+                  {form.engine === "postgres" && <SelectItem value="prefer">Prefer</SelectItem>}
                   <SelectItem value="disable">Disable</SelectItem>
                 </SelectContent>
               </Select>

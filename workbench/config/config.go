@@ -6,7 +6,7 @@ import (
 )
 
 const Name = "workbench"
-const Version = "1.3.1"
+const Version = "1.4.0"
 
 var Env = os.Getenv("ENV")
 var Port = os.Getenv("PORT")

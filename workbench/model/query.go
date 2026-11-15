@@ -20,6 +20,7 @@ type QueryRun struct {
 type QueryColumn struct {
 	Name        string `json:"name"`
 	DataTypeOID uint32 `json:"data_type_oid"`
+	DataType    string `json:"data_type,omitempty"`
 }
 
 type QueryResult struct {

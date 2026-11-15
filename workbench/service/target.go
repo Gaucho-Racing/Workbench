@@ -16,6 +16,7 @@ var ErrTargetNotFound = errors.New("database target not found")
 
 type CreateTargetInput struct {
 	Name         string `json:"name" binding:"required"`
+	Engine       string `json:"engine" binding:"omitempty,oneof=postgres clickhouse"`
 	Environment  string `json:"environment" binding:"required"`
 	Host         string `json:"host" binding:"required"`
 	Port         int    `json:"port" binding:"required,min=1,max=65535"`
@@ -38,7 +39,7 @@ type UpdateTargetInput struct {
 
 func ListTargets(ctx context.Context) ([]model.DatabaseTarget, error) {
 	rows, err := database.Pool.Query(ctx, `
-		SELECT id, name, environment, host, port, database_name, username, ssl_mode,
+		SELECT id, name, engine, environment, host, port, database_name, username, ssl_mode,
 		       created_by_entity_id, created_at, updated_at
 		FROM database_target
 		WHERE deleted_at IS NULL
@@ -51,7 +52,7 @@ func ListTargets(ctx context.Context) ([]model.DatabaseTarget, error) {
 	targets := []model.DatabaseTarget{}
 	for rows.Next() {
 		var target model.DatabaseTarget
-		if err := rows.Scan(&target.ID, &target.Name, &target.Environment, &target.Host, &target.Port,
+		if err := rows.Scan(&target.ID, &target.Name, &target.Engine, &target.Environment, &target.Host, &target.Port,
 			&target.DatabaseName, &target.Username, &target.SSLMode, &target.CreatedByEntityID,
 			&target.CreatedAt, &target.UpdatedAt); err != nil {
 			return nil, err
@@ -64,10 +65,10 @@ func ListTargets(ctx context.Context) ([]model.DatabaseTarget, error) {
 func GetTarget(ctx context.Context, id string) (model.DatabaseTarget, error) {
 	var target model.DatabaseTarget
 	err := database.Pool.QueryRow(ctx, `
-		SELECT id, name, environment, host, port, database_name, username, encrypted_password,
+		SELECT id, name, engine, environment, host, port, database_name, username, encrypted_password,
 		       ssl_mode, created_by_entity_id, created_at, updated_at
 		FROM database_target WHERE id = $1 AND deleted_at IS NULL`, id).Scan(
-		&target.ID, &target.Name, &target.Environment, &target.Host, &target.Port,
+		&target.ID, &target.Name, &target.Engine, &target.Environment, &target.Host, &target.Port,
 		&target.DatabaseName, &target.Username, &target.EncryptedPassword, &target.SSLMode,
 		&target.CreatedByEntityID, &target.CreatedAt, &target.UpdatedAt,
 	)
@@ -84,6 +85,13 @@ func CreateTarget(ctx context.Context, input CreateTargetInput, entityID string)
 	if err != nil {
 		return model.DatabaseTarget{}, err
 	}
+	engine := input.Engine
+	if engine == "" {
+		engine = model.EnginePostgres
+	}
+	if err := validateTargetSSLMode(engine, input.SSLMode); err != nil {
+		return model.DatabaseTarget{}, err
+	}
 	encryptedPassword, err := encryptSecret(input.Password)
 	if err != nil {
 		return model.DatabaseTarget{}, err
@@ -91,6 +99,7 @@ func CreateTarget(ctx context.Context, input CreateTargetInput, entityID string)
 	target := model.DatabaseTarget{
 		ID:                ulid.Make().Prefixed("db"),
 		Name:              name,
+		Engine:            engine,
 		Environment:       environment,
 		Host:              host,
 		Port:              input.Port,
@@ -105,11 +114,11 @@ func CreateTarget(ctx context.Context, input CreateTargetInput, entityID string)
 	}
 	err = database.Pool.QueryRow(ctx, `
 		INSERT INTO database_target (
-			id, name, environment, host, port, database_name, username, encrypted_password,
+			id, name, engine, environment, host, port, database_name, username, encrypted_password,
 			ssl_mode, created_by_entity_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING created_at, updated_at`,
-		target.ID, target.Name, target.Environment, target.Host, target.Port, target.DatabaseName,
+		target.ID, target.Name, target.Engine, target.Environment, target.Host, target.Port, target.DatabaseName,
 		target.Username, target.EncryptedPassword, target.SSLMode, target.CreatedByEntityID,
 	).Scan(&target.CreatedAt, &target.UpdatedAt)
 	if err != nil {
@@ -128,6 +137,9 @@ func UpdateTarget(ctx context.Context, id string, input UpdateTargetInput) (mode
 		input.Name, input.Environment, input.Host, input.DatabaseName, input.Username,
 	)
 	if err != nil {
+		return model.DatabaseTarget{}, err
+	}
+	if err := validateTargetSSLMode(target.Engine, input.SSLMode); err != nil {
 		return model.DatabaseTarget{}, err
 	}
 	target.Name = name
@@ -175,6 +187,18 @@ func normalizeTargetFields(name string, environment string, host string, databas
 		return "", "", "", "", "", fmt.Errorf("name, environment, host, database_name, and username cannot be blank")
 	}
 	return name, environment, host, databaseName, username, nil
+}
+
+func validateTargetSSLMode(engine string, sslMode string) error {
+	if engine != model.EngineClickHouse {
+		return nil
+	}
+	switch sslMode {
+	case "disable", "require", "verify-ca", "verify-full":
+		return nil
+	default:
+		return fmt.Errorf("ClickHouse connections support TLS modes disable, require, verify-ca, and verify-full")
+	}
 }
 
 func DeleteTarget(ctx context.Context, id string) error {

@@ -18,7 +18,10 @@ import (
 
 func IsReadOnlyViolation(err error) bool {
 	var postgresError *pgconn.PgError
-	return errors.As(err, &postgresError) && postgresError.Code == "25006"
+	if errors.As(err, &postgresError) {
+		return postgresError.Code == "25006"
+	}
+	return clickhouseErrorCode(err) == clickhouseReadOnlyErrorCode
 }
 
 func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement string, actorEntityID string, readOnly bool) (model.QueryResult, error) {
@@ -39,6 +42,10 @@ func ExecuteQuery(ctx context.Context, target model.DatabaseTarget, statement st
 	startedAt := time.Now()
 	queryContext, cancel := context.WithTimeout(ctx, config.QueryTimeoutDuration)
 	defer cancel()
+
+	if target.Engine == model.EngineClickHouse {
+		return executeClickHouseQuery(queryContext, run, target, statement, readOnly, config.QueryMaxRowsLimit, config.QueryMaxBytesLimit, startedAt)
+	}
 
 	pool, err := TargetPool(queryContext, target)
 	if err != nil {

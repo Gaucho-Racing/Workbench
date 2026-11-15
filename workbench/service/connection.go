@@ -17,6 +17,7 @@ import (
 
 type pooledTarget struct {
 	pool           *pgxpool.Pool
+	clickhouse     *clickhouseConnection
 	updatedAt      time.Time
 	lastUsed       time.Time
 	users          int
@@ -30,8 +31,9 @@ type targetConnectionManager struct {
 
 type targetPoolLease struct {
 	*pgxpool.Pool
-	release func()
-	once    sync.Once
+	clickhouse *clickhouseConnection
+	release    func()
+	once       sync.Once
 }
 
 var connectionManager *targetConnectionManager
@@ -49,7 +51,16 @@ func CloseConnectionManager() {
 	connectionManager.mu.Lock()
 	defer connectionManager.mu.Unlock()
 	for _, target := range connectionManager.pools {
+		target.close()
+	}
+}
+
+func (target *pooledTarget) close() {
+	if target.pool != nil {
 		target.pool.Close()
+	}
+	if target.clickhouse != nil {
+		_ = target.clickhouse.conn.Close()
 	}
 }
 
@@ -62,6 +73,13 @@ func (lease *targetPoolLease) Release() {
 }
 
 func TestTarget(ctx context.Context, target model.DatabaseTarget) error {
+	if target.Engine == model.EngineClickHouse {
+		connection, err := newClickHouseConnection(ctx, target)
+		if err != nil {
+			return err
+		}
+		return connection.conn.Close()
+	}
 	pool, err := newTargetPool(ctx, target)
 	if err != nil {
 		return err
@@ -82,26 +100,32 @@ func (manager *targetConnectionManager) get(ctx context.Context, target model.Da
 		return manager.lease(key, cached), nil
 	} else if ok {
 		if cached.users == 0 {
-			cached.pool.Close()
+			cached.close()
 			delete(manager.pools, key)
 		} else {
 			cached.removeWhenIdle = true
 			return nil, fmt.Errorf("database connection is being refreshed")
 		}
 	}
-	pool, err := newTargetPool(ctx, target)
+	cached := &pooledTarget{updatedAt: target.UpdatedAt, lastUsed: time.Now(), users: 1}
+	var err error
+	if target.Engine == model.EngineClickHouse {
+		cached.clickhouse, err = newClickHouseConnection(ctx, target)
+	} else {
+		cached.pool, err = newTargetPool(ctx, target)
+	}
 	if err != nil {
 		return nil, err
 	}
 	manager.evictOldestPool()
-	cached := &pooledTarget{pool: pool, updatedAt: target.UpdatedAt, lastUsed: time.Now(), users: 1}
 	manager.pools[key] = cached
 	return manager.lease(key, cached), nil
 }
 
 func (manager *targetConnectionManager) lease(key string, cached *pooledTarget) *targetPoolLease {
 	return &targetPoolLease{
-		Pool: cached.pool,
+		Pool:       cached.pool,
+		clickhouse: cached.clickhouse,
 		release: func() {
 			manager.mu.Lock()
 			defer manager.mu.Unlock()
@@ -112,7 +136,7 @@ func (manager *targetConnectionManager) lease(key string, cached *pooledTarget) 
 			current.users--
 			current.lastUsed = time.Now()
 			if current.users == 0 && current.removeWhenIdle {
-				current.pool.Close()
+				current.close()
 				delete(manager.pools, key)
 			}
 		},
@@ -126,7 +150,7 @@ func (manager *targetConnectionManager) remove(id string) {
 	for key, cached := range manager.pools {
 		if strings.HasPrefix(key, prefix) {
 			if cached.users == 0 {
-				cached.pool.Close()
+				cached.close()
 				delete(manager.pools, key)
 			} else {
 				cached.removeWhenIdle = true
@@ -150,7 +174,7 @@ func (manager *targetConnectionManager) evictOldestPool() {
 	if oldestKey == "" {
 		return
 	}
-	manager.pools[oldestKey].pool.Close()
+	manager.pools[oldestKey].close()
 	delete(manager.pools, oldestKey)
 }
 

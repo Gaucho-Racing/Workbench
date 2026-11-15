@@ -819,7 +819,7 @@ export default function WorkbenchPage() {
                       <Download />
                       <span className="sr-only">Bulk export tables</span>
                     </Button>
-                    <Button variant="ghost" size="icon-sm" disabled={!selectedTarget || !activeDatabaseName} onClick={() => setImportDialogOpen(true)}>
+                    <Button variant="ghost" size="icon-sm" disabled={!selectedTarget || !activeDatabaseName || selectedTarget.engine === "clickhouse"} onClick={() => setImportDialogOpen(true)}>
                       <Upload />
                       <span className="sr-only">Import CSV</span>
                     </Button>
@@ -852,7 +852,7 @@ export default function WorkbenchPage() {
                   <Database className="mx-auto mb-3 size-5 text-muted-foreground" />
                   <p className="text-xs font-medium">No connections yet</p>
                   <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                    {isAdmin ? "Connect a PostgreSQL database to start exploring." : "No database connections have been configured yet."}
+                    {isAdmin ? "Connect a PostgreSQL or ClickHouse database to start exploring." : "No database connections have been configured yet."}
                   </p>
                   {isAdmin && (
                     <Button className="mt-4" size="sm" onClick={openNewConnection}>
@@ -1428,6 +1428,9 @@ function TargetTree({
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onSelect}>
           <Server className={cn("size-3.5", selected && "text-gr-purple")} />
           <span className="truncate font-medium" title={target.name}>{target.name}</span>
+          {target.engine === "clickhouse" && (
+            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] font-semibold text-muted-foreground" title="ClickHouse">CH</span>
+          )}
           <EnvironmentBadge environment={target.environment} />
         </button>
         {canManage && (
@@ -1466,10 +1469,12 @@ function TargetTree({
                       <Download /> Export tables
                       {!canExport && <ContextMenuShortcut>ADMIN</ContextMenuShortcut>}
                     </ContextMenuItem>
-                    <ContextMenuItem disabled={!canExport} onSelect={() => onImportDatabase(database.name)}>
-                      <Upload /> Import CSV files
-                      {!canExport && <ContextMenuShortcut>ADMIN</ContextMenuShortcut>}
-                    </ContextMenuItem>
+                    {target.engine !== "clickhouse" && (
+                      <ContextMenuItem disabled={!canExport} onSelect={() => onImportDatabase(database.name)}>
+                        <Upload /> Import CSV files
+                        {!canExport && <ContextMenuShortcut>ADMIN</ContextMenuShortcut>}
+                      </ContextMenuItem>
+                    )}
                   </ContextMenuContent>
                 </ContextMenu>
                 {active && (
@@ -1637,7 +1642,7 @@ function QueryResultView({ result }: { result: QueryResult }) {
           {result.columns.map((column, index) => (
             <th key={`${column.name}-${index}`} className="min-w-32 border-r border-b px-3 py-1.5 font-medium text-foreground">
               {column.name}
-              <span className="ml-2 font-normal text-muted-foreground">oid:{column.data_type_oid}</span>
+              <span className="ml-2 font-normal text-muted-foreground">{column.data_type || `oid:${column.data_type_oid}`}</span>
             </th>
           ))}
         </tr>

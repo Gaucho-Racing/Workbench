@@ -36,6 +36,9 @@ type Catalog struct {
 }
 
 func GetCatalog(ctx context.Context, target model.DatabaseTarget) (Catalog, error) {
+	if target.Engine == model.EngineClickHouse {
+		return getClickHouseCatalog(ctx, target)
+	}
 	pool, err := TargetPool(ctx, target)
 	if err != nil {
 		return Catalog{}, err

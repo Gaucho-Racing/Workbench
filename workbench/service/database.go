@@ -15,6 +15,9 @@ type ServerDatabase struct {
 }
 
 func ListDatabases(ctx context.Context, target model.DatabaseTarget) ([]ServerDatabase, error) {
+	if target.Engine == model.EngineClickHouse {
+		return listClickHouseDatabases(ctx, target)
+	}
 	pool, err := TargetPool(ctx, target)
 	if err != nil {
 		return nil, err

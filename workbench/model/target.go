@@ -2,9 +2,15 @@ package model
 
 import "time"
 
+const (
+	EnginePostgres   = "postgres"
+	EngineClickHouse = "clickhouse"
+)
+
 type DatabaseTarget struct {
 	ID                string     `json:"id"`
 	Name              string     `json:"name"`
+	Engine            string     `json:"engine"`
 	Environment       string     `json:"environment"`
 	Host              string     `json:"host"`
 	Port              int        `json:"port"`

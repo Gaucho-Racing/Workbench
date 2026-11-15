@@ -136,6 +136,9 @@ func (format ExportFormat) ContentType() string {
 func PreviewExportQuery(ctx context.Context, target model.DatabaseTarget, statement string) (ExportPreview, error) {
 	previewContext, cancel := context.WithTimeout(ctx, config.QueryTimeoutDuration)
 	defer cancel()
+	if target.Engine == model.EngineClickHouse {
+		return previewClickHouseExport(previewContext, target, statement)
+	}
 
 	pool, err := TargetPool(previewContext, target)
 	if err != nil {
@@ -224,6 +227,12 @@ func ExportQuery(ctx context.Context, target model.DatabaseTarget, statement str
 	startedAt := time.Now()
 	exportContext, cancel := context.WithTimeout(ctx, config.QueryTimeoutDuration)
 	defer cancel()
+
+	if target.Engine == model.EngineClickHouse {
+		rowCount, err := exportClickHouseQuery(exportContext, target, statement, options, destination)
+		finishDataTransferRun(transferID, rowCount, startedAt, err)
+		return transferID, err
+	}
 
 	pool, err := TargetPool(exportContext, target)
 	if err != nil {
@@ -352,6 +361,9 @@ func ExportTablesArchive(
 			return fmt.Errorf("create archive entry for %s.%s: %w", table.Schema, table.Name, err)
 		}
 		statement := fmt.Sprintf("SELECT * FROM %s", pgx.Identifier{table.Schema, table.Name}.Sanitize())
+		if target.Engine == model.EngineClickHouse {
+			statement = "SELECT * FROM " + quoteClickHouseIdentifier(table.Schema) + "." + quoteClickHouseIdentifier(table.Name)
+		}
 		_, err = ExportQuery(
 			ctx,
 			target,
@@ -661,6 +673,9 @@ func valuesForExport(format ExportFormat, rows pgx.Rows, fields []pgconn.FieldDe
 }
 
 func PreviewCSVImport(ctx context.Context, target model.DatabaseTarget, schemaName string, tableName string, source io.Reader) (ImportPreview, error) {
+	if target.Engine == model.EngineClickHouse {
+		return ImportPreview{}, ErrImportUnsupported
+	}
 	header, rows, rowCount, err := inspectCSV(source, importPreviewMaxRows)
 	if err != nil {
 		return ImportPreview{}, err
@@ -689,6 +704,9 @@ func PreviewCSVImport(ctx context.Context, target model.DatabaseTarget, schemaNa
 }
 
 func ImportCSV(ctx context.Context, target model.DatabaseTarget, schemaName string, tableName string, fileName string, source io.ReadSeeker, actorEntityID string, options ImportOptions) (ImportResult, error) {
+	if target.Engine == model.EngineClickHouse {
+		return ImportResult{}, ErrImportUnsupported
+	}
 	if _, err := ParseImportErrorPolicy(string(options.ErrorPolicy)); err != nil {
 		return ImportResult{}, err
 	}

@@ -24,7 +24,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Server,
   Table2,
   Trash2,
   Upload,
@@ -35,6 +34,7 @@ import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, 
 import { toast } from "sonner"
 
 import { ConfirmationDialog } from "@/components/ConfirmationDialog"
+import { EngineIcon } from "@/components/EngineIcon"
 import type { CompletedImport } from "@/components/DataImportDialog"
 import type { ExportFormat } from "@/components/ExportDialog"
 import { WorkbenchLogo } from "@/components/WorkbenchLogo"
@@ -1420,26 +1420,23 @@ function TargetTree({
   return (
     <div>
       <div
-        className={cn("group flex h-8 items-center gap-1.5 border-l-2 px-2 text-xs transition-colors duration-150 motion-reduce:transition-none", selected ? "sticky top-0 z-30 border-gr-pink bg-[#181122]/95 text-foreground shadow-sm backdrop-blur-md" : "border-transparent text-muted-foreground hover:bg-muted/50")}
+        className={cn("group flex min-h-8 items-center gap-1.5 border-l-2 px-2 py-1 text-xs transition-colors duration-150 motion-reduce:transition-none", selected ? "sticky top-0 z-30 border-gr-pink bg-[#181122]/95 text-foreground shadow-sm backdrop-blur-md" : "border-transparent text-muted-foreground hover:bg-muted/50")}
       >
         <button className="grid size-5 place-items-center" onClick={() => { setExpanded(!expanded); if (!selected) onSelect() }}>
           <ChevronRight className={cn("size-3.5 transition-transform duration-200 ease-out motion-reduce:transition-none", expanded && "rotate-90")} />
         </button>
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onSelect}>
-          <Server className={cn("size-3.5", selected && "text-gr-purple")} />
-          <span className="truncate font-medium" title={target.name}>{target.name}</span>
-          {target.engine === "clickhouse" && (
-            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] font-semibold text-muted-foreground" title="ClickHouse">CH</span>
-          )}
+          <EngineIcon engine={target.engine} />
+          <span className="min-w-0 break-words font-medium">{target.name}</span>
           <EnvironmentBadge environment={target.environment} />
         </button>
         {canManage && (
           <>
-            <Button variant="ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={onEdit}>
+            <Button variant="ghost" size="icon-sm" className="hidden group-focus-within:inline-flex group-hover:inline-flex" onClick={onEdit}>
               <Pencil />
               <span className="sr-only">Edit connection</span>
             </Button>
-            <Button variant="ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={onDelete}>
+            <Button variant="ghost" size="icon-sm" className="hidden group-focus-within:inline-flex group-hover:inline-flex" onClick={onDelete}>
               <Trash2 />
               <span className="sr-only">Remove connection</span>
             </Button>
